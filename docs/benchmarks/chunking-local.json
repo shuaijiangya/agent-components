@@ -1,0 +1,24 @@
+{
+  "python": "3.12.14",
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "strategy": "character",
+  "size": 1000,
+  "window_chars": 65536,
+  "large_file": {
+    "chunks": 25344,
+    "covered_characters": 25165824,
+    "id_digest": "503a978c59516edb1af2b5a79ba682e560e87097483ae7561f65e6653a876b0b",
+    "elapsed_seconds": 14.649082,
+    "peak_traced_python_bytes": 2191924,
+    "input_utf8_bytes": 71303169
+  },
+  "parallel": {
+    "workers": 8,
+    "requests": 16,
+    "characters_per_request": 1000000,
+    "elapsed_seconds": 1.572271,
+    "all_ids_match_baseline": true
+  },
+  "process_peak_rss_kib_linux": 38900,
+  "scope": "local resource and determinism checks; not production SLA or model accuracy"
+}

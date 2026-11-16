@@ -1,0 +1,98 @@
+[build-system]
+requires = ["hatchling==1.33.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "enterprise-agent-components"
+version = "0.1.0"
+description = "Composable document, extraction, retrieval and AgentScope components"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "pydantic==2.14.3",
+  "jsonschema==4.26.0",
+  "tenacity==9.1.4",
+]
+
+[project.optional-dependencies]
+parsing = ["docling==2.150.1", "torch==2.14.1", "torchvision==0.29.2"]
+chunking = ["chonkie==1.7.0"]
+storage = ["sqlalchemy[asyncio]==2.1.8", "aiosqlite==0.22.1", "alembic==1.20.1"]
+retrieval = ["lancedb==0.41.0"]
+agent = ["agentscope==2.0.11"]
+agent-storage = ["agentscope[storage-sql,service]==2.0.11", "aiosqlite==0.22.1"]
+extraction = ["langextract==1.7.2"]
+evaluation = ["deepeval==4.3.4", "ir-measures==0.4.3"]
+
+[project.scripts]
+agent-components = "agent_components.cli:main"
+
+[dependency-groups]
+dev = [
+  "pytest==9.2.0",
+  "pytest-asyncio==1.5.0",
+  "ruff==0.17.5",
+  "mypy==2.4.1",
+  "build==1.6.1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_components"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src", "/tests", "/docs", "/scripts", "/migrations", "/alembic.ini", "/README.md",
+  "/pyproject.toml", "/uv.lock", "/.python-version", "/.github/workflows/ci.yml",
+]
+
+[tool.uv]
+required-version = ">=0.13.6,<0.14"
+index-url = "https://pypi.org/simple"
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", marker = "(sys_platform == 'linux' or sys_platform == 'win32') and platform_machine == 'AMD64'" },
+  { index = "pytorch-cpu", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+]
+torchvision = [
+  { index = "pytorch-cpu", marker = "(sys_platform == 'linux' or sys_platform == 'win32') and platform_machine == 'AMD64'" },
+  { index = "pytorch-cpu", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-ra --strict-markers"
+markers = ["integration: requires an optional backend, no external model calls"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "D"]
+# D415 only accepts ASCII sentence endings; Chinese docstrings use Chinese punctuation.
+ignore = ["D415"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/test_*.py" = ["E402", "D"]
+"migrations/**" = ["D"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src"]
+strict = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["agentscope.*", "docling.*", "chonkie.*", "langextract.*", "ir_measures.*"]
+follow_imports = "skip"

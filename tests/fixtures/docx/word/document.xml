@@ -1,0 +1,58 @@
+<?xml version="1.0" ?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="Heading1"/>
+      </w:pPr>
+      <w:r>
+        <w:t>合同条款</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:r>
+        <w:t>付款义务</w:t>
+      </w:r>
+    </w:p>
+    <w:tbl>
+      <w:tblPr/>
+      <w:tblGrid>
+        <w:gridCol w:w="3000"/>
+        <w:gridCol w:w="3000"/>
+      </w:tblGrid>
+      <w:tr>
+        <w:tc>
+          <w:p>
+            <w:r>
+              <w:t>项目</w:t>
+            </w:r>
+          </w:p>
+        </w:tc>
+        <w:tc>
+          <w:p>
+            <w:r>
+              <w:t>金额</w:t>
+            </w:r>
+          </w:p>
+        </w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc>
+          <w:p>
+            <w:r>
+              <w:t>服务</w:t>
+            </w:r>
+          </w:p>
+        </w:tc>
+        <w:tc>
+          <w:p>
+            <w:r>
+              <w:t>000123</w:t>
+            </w:r>
+          </w:p>
+        </w:tc>
+      </w:tr>
+    </w:tbl>
+    <w:sectPr/>
+  </w:body>
+</w:document>

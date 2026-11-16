@@ -1,0 +1,41 @@
+{
+  "date": "2026-11-16",
+  "python": "3.12.14",
+  "system": "Linux",
+  "machine": "x86_64",
+  "requires_python": ">=3.12,<3.13",
+  "packages": {
+    "pydantic": "2.14.3",
+    "jsonschema": "4.26.0",
+    "tenacity": "9.1.4",
+    "docling": "2.150.1",
+    "chonkie": "1.7.0",
+    "sqlalchemy": "2.1.8",
+    "aiosqlite": "0.22.1",
+    "alembic": "1.20.1",
+    "agentscope": "2.0.11",
+    "langextract": "1.7.2",
+    "lancedb": "0.41.0",
+    "deepeval": "4.3.4",
+    "ir-measures": "0.4.3",
+    "torch": "2.14.1+cpu",
+    "torchvision": "0.29.2+cpu"
+  },
+  "torch_cuda_version": null,
+  "langchain_installed": false,
+  "verification": {
+    "full_tests_passed": 149,
+    "core_tests_passed": 98,
+    "ruff": "passed",
+    "mypy": "passed",
+    "dependency_check": "passed",
+    "chunking_tests_passed": 59,
+    "core_modules_skipped": 6,
+    "core_integration_deselected": 36,
+    "docstrings": "google-style, Chinese, multiline public interfaces",
+    "chunking_related_tests_passed": 124,
+    "review_behaviors": 45,
+    "review_referenced_test_functions": 54,
+    "mypy_source_files": 30
+  }
+}
