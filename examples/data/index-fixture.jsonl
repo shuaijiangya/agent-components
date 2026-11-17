@@ -1,0 +1,2 @@
+{"id": "fixture-payment", "document_id": "contract-2026-001", "revision_id": "1", "text": "尾款在验收通过后30日内支付。", "vector": [1.0, 0.0, 0.0]}
+{"id": "fixture-secret", "document_id": "contract-2026-001", "revision_id": "1", "text": "未经书面同意不得向第三方披露资料。", "vector": [0.0, 1.0, 0.0]}

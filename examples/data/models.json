@@ -1,0 +1,24 @@
+{
+  "default_alias": "general",
+  "task_routes": {
+    "structured_extraction": "extract",
+    "document_extraction": "extract"
+  },
+  "models": {
+    "general": {
+      "model_env": "GENERAL_MODEL",
+      "api_key_env": "GENERAL_API_KEY",
+      "base_url_env": "GENERAL_BASE_URL"
+    },
+    "extract": {
+      "model_env": "EXTRACT_MODEL",
+      "api_key_env": "EXTRACT_API_KEY",
+      "base_url_env": "EXTRACT_BASE_URL"
+    }
+  },
+  "execution": {
+    "timeout_seconds": 120,
+    "max_concurrency": 4,
+    "max_attempts": 1
+  }
+}

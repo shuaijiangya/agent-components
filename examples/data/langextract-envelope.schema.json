@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "properties": {
+    "extractions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "contract_amount": {
+            "type": "string"
+          },
+          "contract_amount_attributes": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "contract_amount"
+        ]
+      }
+    }
+  },
+  "required": [
+    "extractions"
+  ]
+}

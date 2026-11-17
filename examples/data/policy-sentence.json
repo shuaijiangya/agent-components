@@ -1,0 +1,8 @@
+{
+  "strategy": "sentence",
+  "size": 160,
+  "overlap": 0,
+  "preserve_tables": true,
+  "table_overflow": "error",
+  "sentences_per_chunk": 2
+}

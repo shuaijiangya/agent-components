@@ -10,7 +10,8 @@ build/
 .env
 .env.*
 !.env.example
-data/
+# Runtime output lives at the repository root; examples/data contains source fixtures.
+/data/
 *.db
 *.db-wal
 *.db-shm

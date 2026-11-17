@@ -1,0 +1,7 @@
+{
+  "strategy": "character",
+  "size": 160,
+  "overlap": 0,
+  "preserve_tables": true,
+  "table_overflow": "error"
+}

@@ -1,0 +1,9 @@
+{
+  "backend": "application",
+  "schema_version": "1",
+  "payload": {
+    "proposal_id": "DEMO-001",
+    "status": "proposed",
+    "document_id": "contract-2026-001"
+  }
+}

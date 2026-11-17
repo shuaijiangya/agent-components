@@ -1,0 +1,12 @@
+[
+  {
+    "query_id": "payment",
+    "item_id": "fixture-payment",
+    "score": 1.0
+  },
+  {
+    "query_id": "payment",
+    "item_id": "fixture-secret",
+    "score": 0.0
+  }
+]

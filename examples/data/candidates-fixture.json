@@ -1,0 +1,36 @@
+[
+  {
+    "chunk": {
+      "id": "fixture-payment",
+      "document_id": "contract-2026-001",
+      "revision_id": "1",
+      "text": "尾款在验收通过后30日内支付。",
+      "start": 0,
+      "end": 15,
+      "ordinal": 0
+    },
+    "relevance": 1.0,
+    "vector": [
+      1.0,
+      0.0,
+      0.0
+    ]
+  },
+  {
+    "chunk": {
+      "id": "fixture-secret",
+      "document_id": "contract-2026-001",
+      "revision_id": "1",
+      "text": "未经书面同意不得向第三方披露资料。",
+      "start": 50,
+      "end": 67,
+      "ordinal": 1
+    },
+    "relevance": 0.5,
+    "vector": [
+      0.0,
+      1.0,
+      0.0
+    ]
+  }
+]

@@ -1,0 +1,27 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "contract_id": {
+      "type": "string"
+    },
+    "total_amount_cny": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "acceptance_workdays": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "final_payment_days": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "contract_id",
+    "total_amount_cny",
+    "acceptance_workdays",
+    "final_payment_days"
+  ]
+}

@@ -41,7 +41,7 @@ packages = ["src/agent_components"]
 
 [tool.hatch.build.targets.sdist]
 include = [
-  "/src", "/tests", "/docs", "/scripts", "/migrations", "/alembic.ini", "/README.md",
+  "/src", "/tests", "/docs", "/examples", "/scripts", "/migrations", "/alembic.ini", "/README.md",
   "/pyproject.toml", "/uv.lock", "/.python-version", "/.github/workflows/ci.yml",
 ]
 

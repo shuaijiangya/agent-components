@@ -1,0 +1,10 @@
+{
+  "strategy": "semantic",
+  "size": 160,
+  "overlap": 0,
+  "preserve_tables": true,
+  "table_overflow": "error",
+  "semantic_threshold": 0.8,
+  "similarity_window": 3,
+  "embedding_batch_size": 16
+}

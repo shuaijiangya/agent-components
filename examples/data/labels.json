@@ -1,0 +1,12 @@
+[
+  {
+    "query_id": "payment",
+    "item_id": "fixture-payment",
+    "relevance": 2
+  },
+  {
+    "query_id": "payment",
+    "item_id": "fixture-secret",
+    "relevance": 0
+  }
+]

@@ -5,6 +5,8 @@
 按《Agent 组件技术选型与设计汇总》建立的 Python SDK 项目。分块相关功能已按清单完整实现并逐项验证；其余组件的实施边界见 STATUS.md，业务流程由使用方编排。
 
 - [依赖和 Python 决策](docs/DEPENDENCIES.md)
+- [已开发组件：可运行示例与接入文档](docs/examples/README.md)
+- [非扫描 PDF：标准解析与原生无模型解析](docs/examples/parsing.md)
 - [当前实现与待完成范围](docs/STATUS.md)
 - [本轮验证结果](docs/VALIDATION.md)
 - [组件和 Adapter 边界](docs/ARCHITECTURE.md)
@@ -37,8 +39,8 @@ uv sync --locked --extra storage --extra retrieval
 
 ```sh
 uv sync --locked --all-extras
-uv run --no-sync ruff check src tests migrations scripts
-uv run --no-sync ruff format --check src tests migrations scripts
+uv run --no-sync ruff check src tests migrations scripts examples
+uv run --no-sync ruff format --check src tests migrations scripts examples
 uv run --no-sync mypy src
 uv run --no-sync pytest -q
 uv pip check
