@@ -13,7 +13,7 @@ from typing import Literal, Self
 
 from pydantic import Field, model_validator
 
-from agent_components.chunking_backends import (
+from agent_components.chunking.backends import (
     EmbeddingProvider,
     TokenEncoder,
     literal_spans,
@@ -22,6 +22,9 @@ from agent_components.chunking_backends import (
     token_count,
     token_spans,
 )
+from agent_components.chunking.sections import SectionBuilder
+from agent_components.chunking.sources import SourceMapper
+from agent_components.chunking.tables import SpanPiece, split_table
 from agent_components.core.contracts import (
     Chunk,
     ChunkResult,
@@ -31,8 +34,7 @@ from agent_components.core.contracts import (
     TableSlice,
 )
 from agent_components.core.errors import ChunkAlignmentError, MissingDependencyError
-from agent_components.sources import SourceMapper
-from agent_components.tables import SpanPiece, markdown_table_ranges, split_table
+from agent_components.core.markdown_tables import markdown_table_ranges
 
 _IMPLEMENTATION_VERSION = "chunking-v3"
 _RECURSIVE_DELIMITERS = (("\n\n", "\n"), ("。", "！", "？", ". ", "! ", "? "))
@@ -45,7 +47,7 @@ class ChunkPolicy(Contract):
         strategy: character 为固定字符窗口；recursive 为 Chonkie 递归规则。
         size: token 策略为真实 Token 上限，其余策略为 Python 字符上限。
         overlap: 最多补充的前文量；token 按 Token 计，其余策略按字符计。
-        delimiters: delimiter 策略使用的字面分隔符。
+        delimiters: delimiter 策略使用的字面分隔符序列，可包含一个或多个字符串。
         include_delimiter: 分隔符归入前块或后块，始终保留。
         recursive_delimiters: 递归策略的有序分隔符层级。
         sentence_delimiters: sentence/semantic 的句末规则。
@@ -74,6 +76,12 @@ class ChunkPolicy(Contract):
     semantic_window_chars: int = Field(default=32000, ge=1, strict=True)
     preserve_tables: bool = True
     table_overflow: Literal["error", "allow"] = "error"
+
+    # @field_validator("delimiters", mode="before", json_schema_input_type=str | tuple[str, ...])
+    # @classmethod
+    # def normalize_delimiters(cls, value: object) -> object:
+    #     """将单个字符串作为一个完整的字面分隔符。"""
+    #     return (value,) if isinstance(value, str) else value
 
     @model_validator(mode="after")
     def validate_policy(self) -> Self:
@@ -706,8 +714,6 @@ class ParentChildBuilder:
         Returns:
             章节父块及其子块；标题层级路径存于每块 section_path。
         """
-        from agent_components.sections import SectionBuilder
-
         sections = SectionBuilder().build(
             document, max_level=max_level, include_preamble=include_preamble
         )

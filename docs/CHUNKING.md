@@ -35,13 +35,14 @@
 
 | 模块 | 职责 | 公开入口 |
 | --- | --- | --- |
-| [chunking.py](../src/agent_components/chunking.py) | 策略配置、分片身份、父子关系、章节组合 | ChunkPolicy、Chunker、ParentChildBuilder |
-| [chunking_backends.py](../src/agent_components/chunking_backends.py) | 无损 Token、Chonkie 句子／语义能力 | TokenEncoder、EmbeddingProvider |
-| [sections.py](../src/agent_components/sections.py) | 原生标题层级到不重叠章节范围 | SectionBuilder、Section |
-| [tables.py](../src/agent_components/tables.py) | GFM 表格识别、完整行切分、表头来源 | markdown_table_ranges、split_table |
-| [sources.py](../src/agent_components/sources.py) | 规范文本到原生元素来源查询 | SourceMapper |
-| [parsing.py](../src/agent_components/parsing.py) | Docling 解析与结构化序列化 | DoclingParser |
-| [streaming.py](../src/agent_components/streaming.py) | 文本流快照、窗口化分析、表格行流 | StreamingChunker |
+| [chunking/chunker.py](../src/agent_components/chunking/chunker.py) | 策略配置、分片身份、父子关系、章节组合 | ChunkPolicy、Chunker、ParentChildBuilder |
+| [chunking/backends.py](../src/agent_components/chunking/backends.py) | 无损 Token、Chonkie 句子／语义能力 | TokenEncoder、EmbeddingProvider |
+| [chunking/sections.py](../src/agent_components/chunking/sections.py) | 原生标题层级到不重叠章节范围 | SectionBuilder、Section |
+| [chunking/tables.py](../src/agent_components/chunking/tables.py) | 按完整数据行切分表格，保留表头来源 | split_table |
+| [chunking/sources.py](../src/agent_components/chunking/sources.py) | 规范文本到原生元素来源查询 | SourceMapper |
+| [parsing/docling.py](../src/agent_components/parsing/docling.py) | Docling 解析与结构化序列化 | DoclingParser |
+| [chunking/streaming.py](../src/agent_components/chunking/streaming.py) | 文本流快照、窗口化分析、表格行流 | StreamingChunker |
+| [core/markdown_tables.py](../src/agent_components/core/markdown_tables.py) | 解析和分块共用的 GFM 表格识别 | markdown_table_ranges |
 | [context.py](../src/agent_components/context.py) | 父／邻块补充、重叠正文合并和总预算 | ContextExpander、ContextResult |
 | [selection.py](../src/agent_components/selection.py) | MMR、文本去重及去重依据 | RetrievalCandidate、mmr_select、deduplicate |
 | [contracts.py](../src/agent_components/core/contracts.py) | 数据与位置契约 | Document、Chunk、ChunkResult、DocumentElement、SourceSpan、TableSlice |
@@ -80,7 +81,7 @@
 | `strategy` | recursive | character／recursive／delimiter／token／sentence／semantic |
 | `size` | 1000 | token 策略为真实 Token 上限；其他策略为字符上限 |
 | `overlap` | 0 | 字符策略为精确重复字符；其他策略最多补充的前文量；token 按实际 Token 计 |
-| `delimiters` | `("\n\n", "\n")` | delimiter 字面分隔符，不执行正则 |
+| `delimiters` | `("\n\n", "\n")` | delimiter 字面分隔符序列，可包含一个或多个字符串 |
 | `include_delimiter` | previous | 分隔符归前片／后片，始终保留 |
 | `recursive_delimiters` | 段落／换行 → 中英文句末 | 可配置完整优先级层级，之后为空白、字符回退 |
 | `sentence_delimiters` | 中英文句末及换行 | sentence 和 semantic 的原生句末规则 |

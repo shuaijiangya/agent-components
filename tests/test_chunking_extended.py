@@ -42,21 +42,24 @@ def assert_coverage(doc, result, size, measure=len):
 
 
 @pytest.mark.parametrize("include", ["previous", "next"])
-def test_literal_delimiters_keep_repeated_unicode_and_regex_characters(include):
+@pytest.mark.parametrize(("delimiters", "first_delimiter"), [((".",), "."), ((".*", "||"), ".*")])
+def test_literal_delimiters_keep_repeated_unicode_and_regex_characters(
+    include, delimiters, first_delimiter
+):
     text = "开头.*正文.*重复||重复||尾部"
     doc = Document(id="delimiter", text=text)
     result = Chunker().chunk(
         doc,
         ChunkPolicy(
-            strategy="delimiter", size=100, delimiters=(".*", "||"), include_delimiter=include
+            strategy="delimiter", size=100, delimiters=delimiters, include_delimiter=include
         ),
     )
     assert "".join(c.text for c in result.leaves) == text
     if include == "previous":
-        assert result.leaves[0].text == "开头.*"
+        assert result.leaves[0].text == f"开头{first_delimiter}"
     else:
         assert result.leaves[0].text == "开头"
-        assert result.leaves[1].text.startswith(".*")
+        assert result.leaves[1].text.startswith(first_delimiter)
     assert_coverage(doc, result, 100)
 
 

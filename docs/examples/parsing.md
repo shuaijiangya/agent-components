@@ -1,6 +1,6 @@
 # 文档解析与离线 PDF
 
-源码：[documents.py](../../examples/documents.py)。SDK：[parsing.py](../../src/agent_components/parsing.py)。
+参阅 [解析组件说明](../../src/agent_components/parsing/README.md)、[CLI 源码](../../examples/documents.py)和 [DoclingParser 实现](../../src/agent_components/parsing/docling.py)。
 
 ## 标准组件
 

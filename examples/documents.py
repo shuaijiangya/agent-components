@@ -7,9 +7,8 @@ import argparse
 from hashlib import file_digest
 from pathlib import Path
 
-from agent_components.chunking import ChunkPolicy, ParentChildBuilder
+from agent_components.chunking import ChunkPolicy, ParentChildBuilder, StreamingChunker
 from agent_components.parsing import DoclingParser
-from agent_components.streaming import StreamingChunker
 from examples._common import (
     chunker,
     document,

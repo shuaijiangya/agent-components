@@ -8,13 +8,16 @@
 | --- | --- |
 | `src/agent_components/core/contracts.py` | `9be72559d3b9acf6dc78dd575d6e2acdb98d5ab71c4e78f7e9c7aa56b44e3593` |
 | `src/agent_components/core/errors.py` | `6c85e547f8b1d781a50779e79d25e4470f85e3c9675bdf1bc1cf613dd5207910` |
-| `src/agent_components/chunking.py` | `063190991c2a08fe5839a93e2e1fcd2b4916ebc7ffe61d92985a04eaa481dc0d` |
-| `src/agent_components/chunking_backends.py` | `2ebc46e927f5b22bddc2ac6cb026ea8c7eb5e264fcba9db2907211384313f68e` |
-| `src/agent_components/sections.py` | `388aace6929c167c2cb24da1f6694a686e90e5472d4bd959a15e4898b34c7583` |
-| `src/agent_components/tables.py` | `7981ca7f04066d5080e06c112e38a900e3bcf4b63c931bf9479e827be4e02c24` |
-| `src/agent_components/sources.py` | `c90b4cfcf42ec7d0610d94fa4a2f030a2d1965c3c96fa75d0edbf2774dbf1e0e` |
-| `src/agent_components/parsing.py` | `6c0f28961475368b459ba641c509180b0973e83a5eabfa1b03975a5f6958f986` |
-| `src/agent_components/streaming.py` | `9e9bf4e6741d7596bc690fcc048b84fc6ccbb2d8fdad8875fa1a3f6226644077` |
+| `src/agent_components/chunking/__init__.py` | `6a17e2a239f1e5ba34c5725c515e8416250fcd9656aa224e85643a3cfeda86ac` |
+| `src/agent_components/chunking/chunker.py` | `463a177b47cd3c4b74b5f824a0c45763aba04d1c9967fde222f78f6ffd767aaf` |
+| `src/agent_components/chunking/backends.py` | `2ebc46e927f5b22bddc2ac6cb026ea8c7eb5e264fcba9db2907211384313f68e` |
+| `src/agent_components/chunking/sections.py` | `388aace6929c167c2cb24da1f6694a686e90e5472d4bd959a15e4898b34c7583` |
+| `src/agent_components/core/markdown_tables.py` | `5d5b541c2b177c08aa1ec29df3949a5124101fae28cb1a4ce622afd540d1c2cc` |
+| `src/agent_components/chunking/tables.py` | `c905eccf90340f9329bcbe9355457f000be3f684bd83099ed7247df1610fbbbb` |
+| `src/agent_components/chunking/sources.py` | `c90b4cfcf42ec7d0610d94fa4a2f030a2d1965c3c96fa75d0edbf2774dbf1e0e` |
+| `src/agent_components/parsing/__init__.py` | `7ea81934a00b3777b7bb827eb8dc78b599e2a664f3fbf5ca7433119880124190` |
+| `src/agent_components/parsing/docling.py` | `6af72cd920f92bc2e47b008ada535c202dd8b3bfe5337a92527c91ef775c4ea9` |
+| `src/agent_components/chunking/streaming.py` | `22aa613a2391cdb6b750c90b87a4208f8ff9b82f9148b9e02af08b3fd4ed9deb` |
 | `src/agent_components/context.py` | `0ae7cfc7db209b20097ab4e43579d99287e372166188ebcb5475c59109b8a80a` |
 | `src/agent_components/selection.py` | `eb04e0b9f886f3895dadd6975ec158311800c98e22ed1b886c1631f896e055b8` |
 
@@ -405,9 +408,35 @@ class RetryableError(ComponentError):
     code = "retryable_error"
 ````
 
-## src/agent_components/chunking.py
+## src/agent_components/chunking/__init__.py
 
-[打开完整源码](../../src/agent_components/chunking.py)
+[打开完整源码](../../src/agent_components/chunking/__init__.py)
+
+````python
+"""提供普通分块、父子分块和流式分块入口。"""
+
+from agent_components.chunking.backends import EmbeddingProvider, TokenEncoder
+from agent_components.chunking.chunker import Chunker, ChunkPolicy, ParentChildBuilder
+from agent_components.chunking.sections import Section, SectionBuilder
+from agent_components.chunking.sources import SourceMapper
+from agent_components.chunking.streaming import StreamingChunker
+
+__all__ = [
+    "ChunkPolicy",
+    "Chunker",
+    "EmbeddingProvider",
+    "ParentChildBuilder",
+    "Section",
+    "SectionBuilder",
+    "SourceMapper",
+    "StreamingChunker",
+    "TokenEncoder",
+]
+````
+
+## src/agent_components/chunking/chunker.py
+
+[打开完整源码](../../src/agent_components/chunking/chunker.py)
 
 ````python
 """提供独立的文档分块组件，不依赖 Agent、存储或业务流程。
@@ -425,7 +454,7 @@ from typing import Literal, Self
 
 from pydantic import Field, model_validator
 
-from agent_components.chunking_backends import (
+from agent_components.chunking.backends import (
     EmbeddingProvider,
     TokenEncoder,
     literal_spans,
@@ -434,6 +463,9 @@ from agent_components.chunking_backends import (
     token_count,
     token_spans,
 )
+from agent_components.chunking.sections import SectionBuilder
+from agent_components.chunking.sources import SourceMapper
+from agent_components.chunking.tables import SpanPiece, split_table
 from agent_components.core.contracts import (
     Chunk,
     ChunkResult,
@@ -443,8 +475,7 @@ from agent_components.core.contracts import (
     TableSlice,
 )
 from agent_components.core.errors import ChunkAlignmentError, MissingDependencyError
-from agent_components.sources import SourceMapper
-from agent_components.tables import SpanPiece, markdown_table_ranges, split_table
+from agent_components.core.markdown_tables import markdown_table_ranges
 
 _IMPLEMENTATION_VERSION = "chunking-v3"
 _RECURSIVE_DELIMITERS = (("\n\n", "\n"), ("。", "！", "？", ". ", "! ", "? "))
@@ -457,7 +488,7 @@ class ChunkPolicy(Contract):
         strategy: character 为固定字符窗口；recursive 为 Chonkie 递归规则。
         size: token 策略为真实 Token 上限，其余策略为 Python 字符上限。
         overlap: 最多补充的前文量；token 按 Token 计，其余策略按字符计。
-        delimiters: delimiter 策略使用的字面分隔符。
+        delimiters: delimiter 策略使用的字面分隔符序列，可包含一个或多个字符串。
         include_delimiter: 分隔符归入前块或后块，始终保留。
         recursive_delimiters: 递归策略的有序分隔符层级。
         sentence_delimiters: sentence/semantic 的句末规则。
@@ -486,6 +517,12 @@ class ChunkPolicy(Contract):
     semantic_window_chars: int = Field(default=32000, ge=1, strict=True)
     preserve_tables: bool = True
     table_overflow: Literal["error", "allow"] = "error"
+
+    # @field_validator("delimiters", mode="before", json_schema_input_type=str | tuple[str, ...])
+    # @classmethod
+    # def normalize_delimiters(cls, value: object) -> object:
+    #     """将单个字符串作为一个完整的字面分隔符。"""
+    #     return (value,) if isinstance(value, str) else value
 
     @model_validator(mode="after")
     def validate_policy(self) -> Self:
@@ -1118,8 +1155,6 @@ class ParentChildBuilder:
         Returns:
             章节父块及其子块；标题层级路径存于每块 section_path。
         """
-        from agent_components.sections import SectionBuilder
-
         sections = SectionBuilder().build(
             document, max_level=max_level, include_preamble=include_preamble
         )
@@ -1146,9 +1181,9 @@ class ParentChildBuilder:
         )
 ````
 
-## src/agent_components/chunking_backends.py
+## src/agent_components/chunking/backends.py
 
-[打开完整源码](../../src/agent_components/chunking_backends.py)
+[打开完整源码](../../src/agent_components/chunking/backends.py)
 
 ````python
 """实现可注入的 Token 计量、句子边界和原生 Chonkie 语义策略。
@@ -1446,9 +1481,9 @@ def semantic_spans(
     return spans
 ````
 
-## src/agent_components/sections.py
+## src/agent_components/chunking/sections.py
 
-[打开完整源码](../../src/agent_components/sections.py)
+[打开完整源码](../../src/agent_components/chunking/sections.py)
 
 ````python
 """从 Docling 原生标题层级生成不重叠的章节范围。
@@ -1529,36 +1564,16 @@ class SectionBuilder:
         return tuple(sections)
 ````
 
-## src/agent_components/tables.py
+## src/agent_components/core/markdown_tables.py
 
-[打开完整源码](../../src/agent_components/tables.py)
+[打开完整源码](../../src/agent_components/core/markdown_tables.py)
 
 ````python
-"""按 GFM 表格行保留结构并重复表头。
-
-正文始终是原文连续切片；后续片的重复表头单独记录，不伪造正文字符偏移。
-"""
+"""识别规范 Markdown 中的 GFM 表格范围。"""
 
 import re
-from collections.abc import Callable
-from dataclasses import dataclass
 
-from agent_components.core.contracts import TableSlice
-
-_SEPARATOR = re.compile(r"^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$")
-
-
-@dataclass(frozen=True)
-class SpanPiece:
-    """在分块执行阶段保存区间与额外上下文。
-
-    prefix 的来源记录在 table.header_start/header_end 中。
-    """
-
-    start: int
-    end: int
-    prefix: str = ""
-    table: TableSlice | None = None
+TABLE_SEPARATOR = re.compile(r"^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$")
 
 
 def markdown_table_ranges(text: str) -> list[tuple[int, int]]:
@@ -1568,7 +1583,7 @@ def markdown_table_ranges(text: str) -> list[tuple[int, int]]:
         text: 已由 Docling 渲染或调用方提供的 Markdown。
 
     Returns:
-        完整 GFM 表格的有序区间，不把普通标题文本当成结构标题。
+        围栏代码之外的 GFM 表格有序区间。
     """
     lines = text.splitlines(keepends=True)
     positions = [0]
@@ -1591,7 +1606,7 @@ def markdown_table_ranges(text: str) -> list[tuple[int, int]]:
             fence is None
             and index + 1 < len(lines)
             and "|" in lines[index]
-            and _SEPARATOR.fullmatch(lines[index + 1].strip())
+            and TABLE_SEPARATOR.fullmatch(lines[index + 1].strip())
         ):
             end = index + 2
             while end < len(lines) and lines[end].strip() and "|" in lines[end]:
@@ -1601,6 +1616,36 @@ def markdown_table_ranges(text: str) -> list[tuple[int, int]]:
         else:
             index += 1
     return result
+````
+
+## src/agent_components/chunking/tables.py
+
+[打开完整源码](../../src/agent_components/chunking/tables.py)
+
+````python
+"""按 GFM 表格行保留结构并重复表头。
+
+正文始终是原文连续切片；后续片的重复表头单独记录，不伪造正文字符偏移。
+"""
+
+from collections.abc import Callable
+from dataclasses import dataclass
+
+from agent_components.core.contracts import TableSlice
+from agent_components.core.markdown_tables import TABLE_SEPARATOR
+
+
+@dataclass(frozen=True)
+class SpanPiece:
+    """在分块执行阶段保存区间与额外上下文。
+
+    prefix 的来源记录在 table.header_start/header_end 中。
+    """
+
+    start: int
+    end: int
+    prefix: str = ""
+    table: TableSlice | None = None
 
 
 def split_table(
@@ -1631,7 +1676,7 @@ def split_table(
         ValueError: 表头加单行超过预算且 overflow 为 error。
     """
     lines = text[start:end].splitlines(keepends=True)
-    header_lines = 2 if len(lines) >= 2 and _SEPARATOR.fullmatch(lines[1].strip()) else 0
+    header_lines = 2 if len(lines) >= 2 and TABLE_SEPARATOR.fullmatch(lines[1].strip()) else 0
     if not header_lines:
         if measure(text[start:end]) > size and overflow == "error":
             raise ValueError("non-GFM table exceeds size; use table_overflow='allow'")
@@ -1699,9 +1744,9 @@ def split_table(
     return pieces
 ````
 
-## src/agent_components/sources.py
+## src/agent_components/chunking/sources.py
 
-[打开完整源码](../../src/agent_components/sources.py)
+[打开完整源码](../../src/agent_components/chunking/sources.py)
 
 ````python
 """索引规范文本到 Docling 元素、页码和矩形的映射。
@@ -1769,9 +1814,21 @@ class SourceMapper:
         return tuple(dict.fromkeys(refs))
 ````
 
-## src/agent_components/parsing.py
+## src/agent_components/parsing/__init__.py
 
-[打开完整源码](../../src/agent_components/parsing.py)
+[打开完整源码](../../src/agent_components/parsing/__init__.py)
+
+````python
+"""提供文档解析入口和规范文档转换。"""
+
+from agent_components.parsing.docling import DoclingParser
+
+__all__ = ["DoclingParser"]
+````
+
+## src/agent_components/parsing/docling.py
+
+[打开完整源码](../../src/agent_components/parsing/docling.py)
 
 ````python
 """通过延迟加载的 Docling Adapter 解析文件。
@@ -1794,6 +1851,7 @@ from agent_components.core.contracts import (
     SourceSpan,
 )
 from agent_components.core.errors import MissingDependencyError
+from agent_components.core.markdown_tables import markdown_table_ranges
 
 
 class DoclingParser:
@@ -1997,8 +2055,6 @@ class DoclingParser:
             from docling_core.transforms.serializer.markdown import MarkdownDocSerializer
         except ImportError as exc:
             raise MissingDependencyError("parsing") from exc
-        from agent_components.tables import markdown_table_ranges
-
         serializer = MarkdownDocSerializer(doc=native)
         blocks: list[str] = []
         source_map: list[SourceSpan] = []
@@ -2095,9 +2151,9 @@ class DoclingParser:
         )
 ````
 
-## src/agent_components/streaming.py
+## src/agent_components/chunking/streaming.py
 
-[打开完整源码](../../src/agent_components/streaming.py)
+[打开完整源码](../../src/agent_components/chunking/streaming.py)
 
 ````python
 """以磁盘快照和有界窗口处理超大规范文本。
@@ -2115,9 +2171,10 @@ from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import TextIO
 
-from agent_components.chunking import Chunker, ChunkPolicy, _chunk, _validated_policy
+from agent_components.chunking.chunker import Chunker, ChunkPolicy, _chunk, _validated_policy
+from agent_components.chunking.tables import SpanPiece
 from agent_components.core.contracts import Chunk, Document, TableSlice
-from agent_components.tables import _SEPARATOR
+from agent_components.core.markdown_tables import TABLE_SEPARATOR
 
 
 class StreamingChunker:
@@ -2268,8 +2325,6 @@ class StreamingChunker:
                     local_policy = policy.model_copy(update={"preserve_tables": False})
                     parts = self._chunker._pieces(document, local_policy)
                 else:
-                    from agent_components.tables import SpanPiece
-
                     parts = [SpanPiece(0, len(value), prefix, table)]
                 for chunk_piece in parts:
                     if origin + chunk_piece.end <= emitted_end:
@@ -2349,7 +2404,7 @@ class StreamingChunker:
             )
             if candidate:
                 next_origin, next_line = read()
-                if _SEPARATOR.fullmatch(next_line.strip()):
+                if TABLE_SEPARATOR.fullmatch(next_line.strip()):
                     if len(next_line) > self._window:
                         raise ValueError("table header exceeds streaming window")
                     if buffer:

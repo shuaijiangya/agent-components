@@ -1,6 +1,6 @@
 # 分块组件接入
 
-源码：[documents.py](../../examples/documents.py)、[Provider 工厂](../../examples/providers.py)。完整契约：[CHUNKING.md](../CHUNKING.md)。
+参阅 [分块组件说明](../../src/agent_components/chunking/README.md)、[CLI 源码](../../examples/documents.py)、[Provider 工厂](../../examples/providers.py)和 [完整契约](../CHUNKING.md)。
 
 ## 普通分块
 
@@ -26,6 +26,8 @@ uv run --no-sync python -m examples.documents chunk data/parsed-md.json --input-
 | 语义 | `policy-semantic.json` | Chonkie 原生语义比较＋字符上限；`chunking`＋Embedding Provider |
 
 切换上述文件即可切换策略。`size` 只有 Token 策略以 Token 计，其余以字符计；语义阈值并不是模型抽取准确率。表格默认按行保持，超大单行默认报错；只有明确接受后才配置 `table_overflow: "allow"`。
+
+`delimiter` 策略的 JSON 配置使用数组，可填一个分隔符 `"delimiters": ["||"]` 或多个分隔符 `"delimiters": ["。", "||"]`。每个字符串都作为一个完整的字面分隔符。
 
 表格后片重复表头存入 `context_prefix`，原文正文与坐标不变。**索引／提示应使用 `chunk.index_text`**，它是计算属性，不会出现在 `model_dump()` JSON 中；从 JSON 恢复成 `Chunk` 后读取，或显式拼接 `context_prefix + text`。
 

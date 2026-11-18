@@ -18,6 +18,7 @@ from agent_components.core.contracts import (
     SourceSpan,
 )
 from agent_components.core.errors import MissingDependencyError
+from agent_components.core.markdown_tables import markdown_table_ranges
 
 
 class DoclingParser:
@@ -221,8 +222,6 @@ class DoclingParser:
             from docling_core.transforms.serializer.markdown import MarkdownDocSerializer
         except ImportError as exc:
             raise MissingDependencyError("parsing") from exc
-        from agent_components.tables import markdown_table_ranges
-
         serializer = MarkdownDocSerializer(doc=native)
         blocks: list[str] = []
         source_map: list[SourceSpan] = []

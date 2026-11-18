@@ -14,8 +14,7 @@ import tracemalloc
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from agent_components.chunking import ChunkPolicy
-from agent_components.streaming import StreamingChunker
+from agent_components.chunking import ChunkPolicy, StreamingChunker
 
 
 def write_text(path: Path, characters: int) -> None:

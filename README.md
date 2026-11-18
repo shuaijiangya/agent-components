@@ -6,6 +6,8 @@
 
 - [依赖和 Python 决策](docs/DEPENDENCIES.md)
 - [已开发组件：可运行示例与接入文档](docs/examples/README.md)
+- [文档解析组件与完整示例](src/agent_components/parsing/README.md)
+- [文档分块组件与完整示例](src/agent_components/chunking/README.md)
 - [非扫描 PDF：标准解析与原生无模型解析](docs/examples/parsing.md)
 - [当前实现与待完成范围](docs/STATUS.md)
 - [本轮验证结果](docs/VALIDATION.md)
