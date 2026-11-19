@@ -63,6 +63,7 @@ uv build
 | 执行控制 | `agent_components.execution.ExecutionController.run` | 总超时、并发、取消和显式瞬时错误重试 |
 | 状态 | `agent_components.storage.sqlite.SQLiteStateStore` | 命名空间与版本条件写入的 StateEnvelope |
 | 索引 | `agent_components.retrieval.LanceDBIndex` | 向量 upsert/查询/文档过滤与维度检查 |
+| 文本检索 | `agent_components.retrieval.RetrievalPipeline.search` | 查询 Embedding、可见叶子召回、去重或 MMR、父块与邻块扩展。[接入示例](docs/examples/retrieval.md#从查询文本检索上下文) |
 | 评测 | `evaluate_schema` / `evaluate_retrieval` | Schema 和标准检索指标，不隐式调用裁判模型 |
 | AgentScope | `adapters.agentscope` | 原生模型、Context、权限、Skills 发现与 SQL 工厂 |
 | LangExtract | `adapters.langextract.create_provider` | 原生模型 Provider 桥接；完整业务 Schema 证据映射仍待实施 |

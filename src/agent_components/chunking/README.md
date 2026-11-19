@@ -52,7 +52,7 @@ result = chunker.chunk(document, policy)
 
 for chunk in result.leaves:
     print(chunk.start, chunk.end, chunk.text)
-    assert chunk.text == document.text[chunk.start:chunk.end]
+    assert chunk.text == document.text[chunk.start : chunk.end]
 
 assert result.config_fingerprint == chunker.configuration_fingerprint(policy)
 ```
@@ -293,7 +293,7 @@ assert restored == result == chunker.chunk(document, policy)
 assert restored.covered_ranges == ((0, len(document.text)),)
 assert restored.input_length == len(document.text)
 assert restored.config_fingerprint == chunker.configuration_fingerprint(policy)
-assert all(chunk.text == document.text[chunk.start:chunk.end] for chunk in restored.leaves)
+assert all(chunk.text == document.text[chunk.start : chunk.end] for chunk in restored.leaves)
 empty = chunker.chunk(Document(id="empty-contract", text=""), policy)
 assert empty.chunks == empty.covered_ranges == ()
 ```
@@ -342,15 +342,28 @@ headings = []
 for level, title in [(1, "第一章 交付"), (2, "第一节 验收")]:
     start = text.index(title)
     headings.append(
-        DocumentElement(id=f"heading-{level}", kind="heading", start=start,
-                        end=start + len(title), level=level, title=title)
+        DocumentElement(
+            id=f"heading-{level}",
+            kind="heading",
+            start=start,
+            end=start + len(title),
+            level=level,
+            title=title,
+        )
     )
 document = Document(id="contract-with-headings", text=text, elements=tuple(headings))
 sections: tuple[Section, ...] = SectionBuilder().build(document, max_level=2)
-assert [section.path for section in sections] == [(), ("第一章 交付",), ("第一章 交付", "第一节 验收")]
+assert [section.path for section in sections] == [
+    (),
+    ("第一章 交付",),
+    ("第一章 交付", "第一节 验收"),
+]
 
 result = ParentChildBuilder().build_sections(
-    document, ChunkPolicy(strategy="character", size=24), max_level=2, include_preamble=False,
+    document,
+    ChunkPolicy(strategy="character", size=24),
+    max_level=2,
+    include_preamble=False,
 )
 assert len(result.parents) == 2
 assert result.covered_ranges[0][0] == headings[0].start
@@ -404,7 +417,7 @@ assert len(table_chunks) == 2
 first, second = table_chunks
 assert (first.table.row_start, first.table.row_end) == (0, 1)
 assert (second.table.row_start, second.table.row_end) == (1, 2)
-assert document.text[second.table.header_start:second.table.header_end] == header
+assert document.text[second.table.header_start : second.table.header_end] == header
 print(repr(table_chunks[1].text))
 print(table_chunks[1].index_text)
 assert table_chunks[1].context_prefix == header
@@ -460,10 +473,19 @@ assert all(chunk.table is None for chunk in Chunker().chunk(literal, policy).lea
 from agent_components.chunking import Chunker, ChunkPolicy, SourceMapper
 from agent_components.core.contracts import Document, SourceRef, SourceSpan
 
-page_ref = SourceRef(input_id="contract-001", element_id="#/texts/0", page=2,
-                     precision="element", bbox=(10, 20, 100, 40), coord_origin="TOPLEFT")
-document = Document(id="contract-001", text="尾款验收后支付。",
-                    source_map=(SourceSpan(start=0, end=8, refs=(page_ref,)),))
+page_ref = SourceRef(
+    input_id="contract-001",
+    element_id="#/texts/0",
+    page=2,
+    precision="element",
+    bbox=(10, 20, 100, 40),
+    coord_origin="TOPLEFT",
+)
+document = Document(
+    id="contract-001",
+    text="尾款验收后支付。",
+    source_map=(SourceSpan(start=0, end=8, refs=(page_ref,)),),
+)
 text_ref, element_ref = SourceMapper(document).resolve(2, 5)
 assert (text_ref.precision, text_ref.start, text_ref.end) == ("text", 2, 5)
 assert (element_ref.precision, element_ref.page, element_ref.bbox) == ("element", 2, page_ref.bbox)
@@ -516,8 +538,14 @@ with TemporaryDirectory() as directory:
     staging = Path(directory) / "chunks.tmp"
     published = Path(directory) / "chunks.jsonl"
     with (
-        closing(streamer.iter_file(Path("examples/data/contract.txt"), policy,
-                                   document_id="contract-001", revision_id="v3")) as chunks,
+        closing(
+            streamer.iter_file(
+                Path("examples/data/contract.txt"),
+                policy,
+                document_id="contract-001",
+                revision_id="v3",
+            )
+        ) as chunks,
         staging.open("w", encoding="utf-8") as sink,
     ):
         for chunk in chunks:
@@ -537,10 +565,10 @@ header = "| 名称 | 金额 |\n| --- | --- |\n"
 text = "前言\n" + header + "".join(f"| 项目{i} | {i} |\n" for i in range(30))
 policy = ChunkPolicy(strategy="character", size=70)
 streamer = StreamingChunker(window_chars=80, max_input_chars=5_000, max_chunks=100)
-pieces = (text[start:start + 11] for start in range(0, len(text), 11))
+pieces = (text[start : start + 11] for start in range(0, len(text), 11))
 cursor = final_row = 0
 for chunk in streamer.iter_text(pieces, policy, document_id="contract-table"):
-    assert chunk.start == cursor and chunk.text == text[chunk.start:chunk.end]
+    assert chunk.start == cursor and chunk.text == text[chunk.start : chunk.end]
     cursor = chunk.end
     if chunk.table:
         assert len(chunk.index_text) <= policy.size

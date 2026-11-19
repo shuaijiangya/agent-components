@@ -94,18 +94,22 @@ def mmr_select(
         raise ValueError("limit must be a positive integer")
     if not math.isfinite(relevance_weight) or not 0 <= relevance_weight <= 1:
         raise ValueError("relevance_weight must be between zero and one")
+    # 将查询和候选向量转换为单位向量，之后用点积计算余弦相似度。
     query = _unit(query_vector)
     vectors = []
     for item in candidates:
         if item.vector is None or len(item.vector) != len(query):
             raise ValueError("MMR requires equal-dimensional candidate vectors")
         vectors.append(_unit(item.vector))
+    # relevance[i] 用查询与候选的余弦相似度计算，与 LanceDB 返回的距离分数无关。
     relevance = [_cosine(query, vector) for vector in vectors]
     remaining = list(range(len(candidates)))
     selected: list[int] = []
     redundancy = [0.0] * len(candidates)
     while remaining and len(selected) < limit:
-        # 第一片按查询相关性选；后续逐步更新与已选集合的最大相似度。
+        # 这里选出本轮入选的候选。第一轮直接取查询相关性最高的块。
+        # 后续得分 = 相关性权重 × 查询相似度 − 多样性权重 × 与已选块的最大相似度。
+        # 相似内容会受到惩罚，但这里没有判定重复的阈值，候选仍可能入选。
         best = max(
             remaining,
             key=lambda i: (
@@ -116,6 +120,8 @@ def mmr_select(
         )
         remaining.remove(best)
         selected.append(best)
+        # 为下一轮更新每个剩余候选与已选集合的最大相似度。
+        # 第一次直接使用本轮相似度，以保留余弦为负的情况。
         for index in remaining:
             value = _cosine(vectors[index], vectors[best])
             redundancy[index] = value if len(selected) == 1 else max(redundancy[index], value)
@@ -152,10 +158,13 @@ def deduplicate(
     signatures: list[set[str]] = []
     exact: dict[str, str] = {}
     dropped = []
+    # 按召回顺序扫描。只有已保留的候选才会作为后续比较的参照。
     for item in candidates:
+        # 比较 index_text（上下文前缀加正文），统一全半角、大小写和连续空白。
         normalized = " ".join(
             unicodedata.normalize("NFKC", item.chunk.index_text).casefold().split()
         )
+        # 精确去重在这里判定。规范化文本相同时，保留先入选的块，标记当前块为重复项。
         if normalized in exact:
             dropped.append(
                 SelectionDrop(
@@ -166,15 +175,20 @@ def deduplicate(
                 )
             )
             continue
+        # 近重复比较用连续字符片段的集合。按默认的三字符长度，
+        # “付款期限”得到“付款期”和“款期限”两个片段。
         grams = {
             normalized[i : i + shingle_size]
             for i in range(max(1, len(normalized) - shingle_size + 1))
         }
         duplicate = None
         for index, signature in enumerate(signatures):
-            # 用长度上界提前排除不可能达到阈值的配对，再算精确 Jaccard。
+            # 交集最多等于较小集合的长度，并集至少等于较大集合的长度。
+            # 若按这个上限算也达不到阈值，就跳过这组比较。
             if min(len(grams), len(signature)) / max(len(grams), len(signature)) < threshold:
                 continue
+            # 这里判定近重复。Jaccard = 片段交集的大小 / 片段并集的大小。
+            # 达到阈值就关联第一个满足条件的已保留块。
             similarity = len(grams & signature) / len(grams | signature)
             if similarity >= threshold:
                 duplicate = SelectionDrop(
@@ -184,6 +198,7 @@ def deduplicate(
                     reason="shingle_jaccard",
                 )
                 break
+        # 两种检查都没命中才保留当前块，并让它参与后续比较。
         if duplicate is None:
             exact[normalized] = item.chunk.id
             kept.append(item)

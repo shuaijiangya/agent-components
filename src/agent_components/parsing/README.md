@@ -95,8 +95,10 @@ with TemporaryDirectory() as directory:
 
     files = [
         (Path("examples/data/contract.md"), "合同总金额"),
-        (html, "完工后验收"), (htm, "完工后验收"),
-        (pptx, "交付与验收"), (xlsx, "数量"),
+        (html, "完工后验收"),
+        (htm, "完工后验收"),
+        (pptx, "交付与验收"),
+        (xlsx, "数量"),
     ]
     parser = DoclingParser()
     results = parser.iter_parse(path for path, _ in files)
@@ -126,7 +128,7 @@ parsed = DoclingParser().parse(
 document = parsed.document
 for element in document.elements:
     if element.kind in {"heading", "table"}:
-        print(element.kind, element.level, document.text[element.start:element.end])
+        print(element.kind, element.level, document.text[element.start : element.end])
 
 for span in document.source_map[:3]:
     for ref in span.refs:

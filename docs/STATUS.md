@@ -16,6 +16,7 @@
 | 解析 | TXT/CRLF；真实 Markdown/HTML/DOCX；原生元素级来源、章节和表格；PDF 默认阻止隐式下载 |
 | SQLite | 状态封套、命名空间、事务版本条件写入、重启读取、Alembic 初始迁移 |
 | LanceDB | 实际向量索引/upsert、维度检查、文档范围过滤；不是完整知识库与 RAG 实现 |
+| 文本检索 | 可注入 Embedding，一次执行可见叶子召回、去重或 MMR，再扩展父块与邻块。可见分块由调用方提供 |
 | AgentScope | 模型级结构化适配、原生上下文快照/压缩入口、权限判定转换、Skills 发现与内容版本 |
 | 原生 SQL Storage | 独立工厂，原生模块真实导入与 SQLite 创建/查询；不启动服务 |
 | LangExtract | 真实 BaseLanguageModel Provider 桥接统一模型入口，提供同步线程到异步调用的转换 |
@@ -26,7 +27,7 @@
 
 - 完整知识库 CRUD、文档/索引版本发布、删除可见性、任务与产物生命周期。
 - PDF 权重实际推理、OCR 与更完整 Office 文件矩阵和模型质量验收；元素级 SourceMap 已实现。
-- 中文 BM25/FTS、RRF、Reranker Provider、权威版本过滤和完整检索结果；MMR/去重/上下文扩展已独立实现。
+- 中文 BM25/FTS 查询、RRF、Reranker Provider，以及权威权限和发布版本数据源。
 - **LangExtract 到任意业务 JSON Schema 的完整证据映射、字段证据、覆盖范围与部分失败。** 当前 Provider 只是模型接口桥接；Extractor 的 evidence 策略需要显式注入 EvidenceBackend，未配置时抛 UnsupportedCapabilityError，绝不冒充完整证据抽取。
 - DeepEval 的统一裁判模型适配、字段与证据的完整指标及报告。
 - Agent 运行入口、完整消息/工具事件协议、框架配置映射、Skills 挂载和原生失败明细。

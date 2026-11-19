@@ -98,6 +98,11 @@ class LanceDBIndex:
         if self._table.schema != schema:
             raise ValueError("Existing LanceDB schema is incompatible with this index")
 
+    @property
+    def dimensions(self) -> int:
+        """返回索引表定义的向量维度。"""
+        return self._dimensions
+
     def upsert(self, records: Sequence[IndexRecord]) -> None:
         """按条目 ID 原位更新或新增文本和向量。
 
@@ -141,24 +146,49 @@ class LanceDBIndex:
         Raises:
             ValueError: 向量无效或 limit 非正。
         """
+        return tuple(
+            match for match, _ in self._search(vector, limit=limit, document_ids=document_ids)
+        )
+
+    def _search(
+        self,
+        vector: Sequence[float],
+        *,
+        limit: int,
+        document_ids: Sequence[str] | None = None,
+        chunk_ids: Sequence[str] | None = None,
+        with_vectors: bool = False,
+    ) -> tuple[tuple[IndexMatch, tuple[float, ...] | None], ...]:
+        """为索引 API 和组装入口共享召回逻辑，按需返回同一行的向量。"""
         if len(vector) != self._dimensions or not all(math.isfinite(v) for v in vector):
             raise ValueError("Query vector has invalid dimension or values")
         if limit < 1:
             raise ValueError("limit must be positive")
-        if document_ids is not None and not document_ids:
-            return ()
+        filters = []
+        for column, identifiers in (("document_id", document_ids), ("id", chunk_ids)):
+            if identifiers is None:
+                continue
+            if not identifiers:
+                return ()
+            values = ",".join("'" + value.replace("'", "''") + "'" for value in identifiers)
+            filters.append(f"{column} IN ({values})")
         query = self._table.search(list(vector)).limit(limit)
-        if document_ids is not None:
-            values = ",".join("'" + value.replace("'", "''") + "'" for value in document_ids)
-            query = query.where(f"document_id IN ({values})", prefilter=True)
+        if filters:
+            query = query.where(" AND ".join(filters), prefilter=True)
+        columns = ["id", "document_id", "revision_id", "text"]
+        if with_vectors:
+            columns.append("vector")
         return tuple(
-            IndexMatch(
-                id=row["id"],
-                document_id=row["document_id"],
-                revision_id=row["revision_id"],
-                text=row["text"],
-                score=row["_distance"],
-                score_kind="distance",
+            (
+                IndexMatch(
+                    id=row["id"],
+                    document_id=row["document_id"],
+                    revision_id=row["revision_id"],
+                    text=row["text"],
+                    score=row["_distance"],
+                    score_kind="distance",
+                ),
+                tuple(row["vector"]) if with_vectors else None,
             )
-            for row in query.to_list()
+            for row in query.select(columns).to_list()
         )

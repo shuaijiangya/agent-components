@@ -1,6 +1,53 @@
 # 检索原语、上下文扩展与选择
 
-源码：[retrieval.py](../../examples/retrieval.py)。这些组件接收已有块和向量，当前没有统一封装 embedding→BM25→融合→重排序→生成的 RAG 流程。
+索引实现与文本检索入口位于 `agent_components.retrieval`。现有命令仍可单独运行各检索原语。[索引源码](../../src/agent_components/retrieval/index.py) · [命令行源码](../../examples/retrieval.py)
+
+## 从查询文本检索上下文
+
+`RetrievalPipeline.search()` 接受查询字符串和当前请求可见的 `Chunk` 集合。它调用使用方注入的 `EmbeddingProvider`，召回叶子块，按选定策略处理候选，再补充父块或邻块。[链路源码](../../src/agent_components/retrieval/pipeline.py)
+
+先准备同一批已入库的叶子块及其向量。`IndexRecord.id`、`document_id`、`revision_id` 与 `Chunk` 对应，索引文本使用 `chunk.index_text`。查询与入库共享 Embedding 模型、版本、维度和预处理。下面的例子使用现有 OpenAI 兼容工厂，请先设置 `EMBEDDING_BASE_URL`、`EMBEDDING_MODEL`、`EMBEDDING_DIMENSION` 和 `EMBEDDING_API_KEY`，并安装 `retrieval` 和 `agent` 依赖组。[工厂实现](../../examples/providers.py)
+
+```python
+from contextlib import closing
+from pathlib import Path
+
+from agent_components.core.contracts import ChunkResult
+from agent_components.retrieval import LanceDBIndex, RetrievalOptions, RetrievalPipeline
+from examples.providers import compatible_embeddings
+
+# 文件应只包含本次请求已授权、已发布的块。父块应在全文可见时才加入。
+visible = ChunkResult.model_validate_json(Path("data/visible-chunks.json").read_bytes()).chunks
+
+with closing(compatible_embeddings()) as embedding:
+    index = LanceDBIndex(Path("data/lancedb"), dimensions=embedding.dimension)
+    pipeline = RetrievalPipeline(index, embedding)
+    result = pipeline.search(
+        "设备验收不通过时，尾款应在什么时候支付？",
+        visible_chunks=visible,
+        options=RetrievalOptions(
+            selection="mmr",
+            recall_limit=30,
+            top_k=5,
+            parent_mode="none",
+            before=1,
+            after=1,
+            max_characters=6000,
+        ),
+    )
+
+for window in result.context.windows:
+    print(window.document_id, window.revision_id, window.start, window.end)
+    print(window.index_text)
+```
+
+- `recall_limit` 控制选择前的召回量。`top_k` 控制选择后的叶子数，不计补充的上下文块。
+- `selection="dedup"` 默认使用文本去重。`selection="mmr"` 读取索引行里的候选向量，只对查询文本执行一次向量化。
+- `parent_mode="none"` 使用邻块配置。`append` 额外纳入父块，`replace` 以父块替换有父关系的命中。后两种要求相关父块在可见集合中。
+- `result.matches` 按选择后的顺序返回索引命中，`score` 保留 LanceDB 距离。`result.dropped` 记录文本去重的依据。`result.context` 返回窗口、纳入块 ID 和因字符预算省略的块 ID。
+- 可见叶子 ID 在 Top K 前过滤。空作用域直接返回空结果。索引行的版本、文档或文本与可见块不一致时，调用会报错。
+
+`visible_chunks` 是当前请求的授权语料快照。此入口在内存中持有该快照，并将可见叶子 ID 传给 LanceDB 过滤。查询为同步调用。业务服务可在自己的线程池调度，并管理 Provider 超时与生命周期。
 
 ## 嵌入式 LanceDB
 
@@ -38,8 +85,12 @@ uv run --no-sync python -m examples.retrieval context data/parent-child.json --h
 from agent_components.context import ContextExpander
 
 context = ContextExpander().expand(
-    hits, visible_corpus,
-    before=1, after=1, parent_mode="replace", max_characters=8000,
+    hits,
+    visible_corpus,
+    before=1,
+    after=1,
+    parent_mode="replace",
+    max_characters=8000,
 )
 ```
 
@@ -56,4 +107,4 @@ uv run --no-sync python -m examples.retrieval select examples/data/candidates-fi
 
 MMR 使用查询余弦相关性与已选候选最大余弦冗余进行贪心选择，不直接混用未归一化的 BM25 分数。去重使用规范化文本的精确比较／字符 shingle Jaccard，并返回 `dropped` 的保留对象和相似度依据；它不能判断语义事实是否相同。
 
-当前候选池默认最多 2000，避免不受控的比较成本。MMR、去重与上下文扩展的先后顺序由使用方按业务验证，不在组件内固定。
+当前候选池默认最多 2000，避免不受控的比较成本。`RetrievalPipeline` 先进行候选选择再补上下文。单独使用原语时，调用方可以按业务调整组合顺序。
