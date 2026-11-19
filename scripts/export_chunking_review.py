@@ -22,8 +22,8 @@ FILES = (
     "src/agent_components/parsing/__init__.py",
     "src/agent_components/parsing/docling.py",
     "src/agent_components/chunking/streaming.py",
-    "src/agent_components/context.py",
-    "src/agent_components/selection.py",
+    "src/agent_components/retrieval/context.py",
+    "src/agent_components/retrieval/selection.py",
 )
 CONTRACTS = {
     "Contract",

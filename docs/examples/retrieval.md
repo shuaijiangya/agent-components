@@ -1,6 +1,6 @@
 # 检索原语、上下文扩展与选择
 
-索引实现与文本检索入口位于 `agent_components.retrieval`。现有命令仍可单独运行各检索原语。[索引源码](../../src/agent_components/retrieval/index.py) · [命令行源码](../../examples/retrieval.py)
+文本检索入口和存储端口位于 `agent_components.retrieval`。`RetrievalPipeline` 通过 `VectorStore` 接受不同的向量存储适配器。现有命令仍可单独运行各检索原语。[向量端口](../../src/agent_components/retrieval/vector_store.py) · [LanceDB 适配器](../../src/agent_components/retrieval/adapters/lancedb.py) · [命令行源码](../../examples/retrieval.py)
 
 ## 从查询文本检索上下文
 
@@ -49,6 +49,8 @@ for window in result.context.windows:
 
 `visible_chunks` 是当前请求的授权语料快照。此入口在内存中持有该快照，并将可见叶子 ID 传给 LanceDB 过滤。查询为同步调用。业务服务可在自己的线程池调度，并管理 Provider 超时与生命周期。
 
+使用知识库内容组件时，可以通过 `KnowledgeBase.published_chunks(document_ids=...)` 取得这份快照，再传给检索入口。[知识库与存储切换](knowledge-base.md)
+
 ## 嵌入式 LanceDB
 
 向量由使用方提供。输入为 `IndexRecord` JSONL：`id/document_id/revision_id/text/vector`；数据库运行在当前进程，不另起服务。
@@ -82,7 +84,7 @@ uv run --no-sync python -m examples.retrieval context data/parent-child.json --h
 直接接入公共 API：
 
 ```python
-from agent_components.context import ContextExpander
+from agent_components.retrieval import ContextExpander
 
 context = ContextExpander().expand(
     hits,

@@ -19,6 +19,7 @@ uv run --no-sync python -m examples.documents --help
 | 六种分块／父子块／流式 | `examples.documents chunk / parents / stream` | 字符、分隔符核心；其余见分块文档 | [分块接入](chunking.md) |
 | 父块与邻块扩展／MMR／去重 | `examples.retrieval context / select` | 核心 | [检索组件](retrieval.md) |
 | 向量索引与查询 | `examples.retrieval index / search` | `retrieval` | [检索组件](retrieval.md) |
+| 知识库内容与存储切换 | `KnowledgeBase`、`StorageRouter` | SQLite 为核心；LanceDB 需 `retrieval` | [知识库与存储适配器](knowledge-base.md) |
 | 公共状态的 CAS 保存 | `examples.state load / save` | `storage` | [状态与执行控制](state-execution.md) |
 | 超时／并发／显式重试 | `examples.execution` | 核心 | [状态与执行控制](state-execution.md) |
 | 模型策略路由／结构化提取 | `examples.models generate / extract` | `agent` | [模型与提取](models.md) |

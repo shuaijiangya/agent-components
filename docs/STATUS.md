@@ -15,7 +15,9 @@
 | 流式与后处理 | 文本六策略流式、PDF 分页入口；父/邻块扩展、重叠合并、MMR、文本近重复；独立组件 |
 | 解析 | TXT/CRLF；真实 Markdown/HTML/DOCX；原生元素级来源、章节和表格；PDF 默认阻止隐式下载 |
 | SQLite | 状态封套、命名空间、事务版本条件写入、重启读取、Alembic 初始迁移 |
-| LanceDB | 实际向量索引/upsert、维度检查、文档范围过滤；不是完整知识库与 RAG 实现 |
+| 知识库内容 | SQLite 保存规范文档与分块版本，原子发布和取消发布，读取指定文档的发布快照 |
+| 存储防腐层 | `KnowledgeRepository`、`VectorStore` 和按请求选取的 `StorageRouter`。默认适配器为 SQLite 与 LanceDB |
+| LanceDB | 向量索引、upsert、维度检查、文档与叶子范围过滤 |
 | 文本检索 | 可注入 Embedding，一次执行可见叶子召回、去重或 MMR，再扩展父块与邻块。可见分块由调用方提供 |
 | AgentScope | 模型级结构化适配、原生上下文快照/压缩入口、权限判定转换、Skills 发现与内容版本 |
 | 原生 SQL Storage | 独立工厂，原生模块真实导入与 SQLite 创建/查询；不启动服务 |
@@ -25,7 +27,7 @@
 
 ## 仍待落地的设计项
 
-- 完整知识库 CRUD、文档/索引版本发布、删除可见性、任务与产物生命周期。
+- 知识库配置 CRUD、原始文件与解析产物管理、索引任务和清理、备份及跨存储迁移。内容发布指针和停止可见性已提供。
 - PDF 权重实际推理、OCR 与更完整 Office 文件矩阵和模型质量验收；元素级 SourceMap 已实现。
 - 中文 BM25/FTS 查询、RRF、Reranker Provider，以及权威权限和发布版本数据源。
 - **LangExtract 到任意业务 JSON Schema 的完整证据映射、字段证据、覆盖范围与部分失败。** 当前 Provider 只是模型接口桥接；Extractor 的 evidence 策略需要显式注入 EvidenceBackend，未配置时抛 UnsupportedCapabilityError，绝不冒充完整证据抽取。

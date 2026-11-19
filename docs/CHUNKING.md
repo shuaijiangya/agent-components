@@ -43,8 +43,8 @@
 | [parsing/docling.py](../src/agent_components/parsing/docling.py) | Docling 解析与结构化序列化 | DoclingParser |
 | [chunking/streaming.py](../src/agent_components/chunking/streaming.py) | 文本流快照、窗口化分析、表格行流 | StreamingChunker |
 | [core/markdown_tables.py](../src/agent_components/core/markdown_tables.py) | 解析和分块共用的 GFM 表格识别 | markdown_table_ranges |
-| [context.py](../src/agent_components/context.py) | 父／邻块补充、重叠正文合并和总预算 | ContextExpander、ContextResult |
-| [selection.py](../src/agent_components/selection.py) | MMR、文本去重及去重依据 | RetrievalCandidate、mmr_select、deduplicate |
+| [retrieval/context.py](../src/agent_components/retrieval/context.py) | 父／邻块补充、重叠正文合并和总预算 | ContextExpander、ContextResult |
+| [retrieval/selection.py](../src/agent_components/retrieval/selection.py) | MMR、文本去重及去重依据 | RetrievalCandidate、mmr_select、deduplicate |
 | [contracts.py](../src/agent_components/core/contracts.py) | 数据与位置契约 | Document、Chunk、ChunkResult、DocumentElement、SourceSpan、TableSlice |
 
 这些入口不要求 Agent、数据库或固定业务 DAG。需要真实 Token 或语义能力时显式注入对应提供方；不隐式下载模型，也不引入 LangChain。

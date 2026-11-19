@@ -67,7 +67,7 @@ class RoutingError(ComponentError):
 
 
 class RevisionConflictError(ComponentError):
-    """表示状态版本条件不再满足。
+    """表示持久化内容或状态的版本条件不再满足。
 
     调用方应重新读取状态并决定如何处理冲突，不自动覆盖。
     """

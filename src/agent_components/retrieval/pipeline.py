@@ -7,10 +7,15 @@ from typing import Literal, Self
 from pydantic import Field, model_validator
 
 from agent_components.chunking import EmbeddingProvider
-from agent_components.context import ContextExpander, ContextResult
 from agent_components.core.contracts import Chunk, Contract
-from agent_components.retrieval.index import IndexMatch, LanceDBIndex
-from agent_components.selection import RetrievalCandidate, SelectionDrop, deduplicate, mmr_select
+from agent_components.retrieval.context import ContextExpander, ContextResult
+from agent_components.retrieval.selection import (
+    RetrievalCandidate,
+    SelectionDrop,
+    deduplicate,
+    mmr_select,
+)
+from agent_components.retrieval.vector_store import IndexMatch, VectorStore
 
 
 class RetrievalOptions(Contract):
@@ -43,7 +48,7 @@ class RetrievalOptions(Contract):
 class RetrievalResult(Contract):
     """返回选中的命中、去重依据以及最终上下文。
 
-    matches 保持选择后的顺序，score 仍为 LanceDB 原始距离。
+    matches 保持选择后的顺序，score 和 score_kind 保留适配器提供的原始分值及方向。
     context 标注实际纳入和因字符预算省略的分块。
     """
 
@@ -59,11 +64,11 @@ class RetrievalPipeline:
     一个调用只向量化查询文本，MMR 从召回行读取已有的候选向量。
     """
 
-    def __init__(self, index: LanceDBIndex, embedding: EmbeddingProvider) -> None:
+    def __init__(self, index: VectorStore, embedding: EmbeddingProvider) -> None:
         """绑定向量索引和查询向量提供方。
 
         Args:
-            index: 已写入叶子块及其向量的 LanceDB 索引。
+            index: 已写入叶子块及其向量的向量存储适配器。
             embedding: 与索引数据使用同模型、同版本及预处理的同步向量提供方。
 
         Raises:
@@ -119,17 +124,20 @@ class RetrievalPipeline:
         if not math.isfinite(norm) or norm == 0:
             raise ValueError("query embedding must be finite and nonzero")
 
-        # 先按可见叶子过滤，再由 LanceDB 按距离召回至多 recall_limit 条候选。
+        # 适配器先按可见叶子过滤，再按原生分值召回至多 recall_limit 条候选。
         # 只有 MMR 需要返回候选向量。直接读取已入库的向量，无需重新计算。
-        rows = self._index._search(
+        rows = self._index.recall(
             query_vector,
             limit=options.recall_limit,
             chunk_ids=leaf_ids,
-            with_vectors=options.selection == "mmr",
+            include_vectors=options.selection == "mmr",
         )
+        if len(rows) > options.recall_limit:
+            raise ValueError("vector store returned more than the requested limit")
         matches: dict[str, IndexMatch] = {}
         candidates = []
-        for match, vector in rows:
+        for row in rows:
+            match = row.match
             chunk = by_id.get(match.id)
             if (
                 chunk is None
@@ -138,12 +146,15 @@ class RetrievalPipeline:
                 or match.text not in (chunk.text, chunk.index_text)
             ):
                 raise ValueError("index row does not match the visible chunk")
+            if match.score_kind not in {"distance", "similarity"}:
+                raise ValueError("vector score_kind must be distance or similarity")
+            relevance = -match.score if match.score_kind == "distance" else match.score
             matches[match.id] = match
             candidates.append(
-                RetrievalCandidate(chunk=chunk, relevance=-match.score, vector=vector)
+                RetrievalCandidate(chunk=chunk, relevance=relevance, vector=row.vector)
             )
         # 去重和 MMR 都在这里执行，两个分支互斥。具体算法在 selection.py。
-        # dedup 按 LanceDB 的召回顺序过滤重复文本，产出丢弃记录。
+        # dedup 按适配器的召回顺序过滤重复文本，产出丢弃记录。
         # mmr 用查询向量和候选向量重新选择至多 top_k 条，不执行文本去重。
         selected = (
             mmr_select(

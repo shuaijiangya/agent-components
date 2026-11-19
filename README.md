@@ -8,6 +8,7 @@
 - [已开发组件：可运行示例与接入文档](docs/examples/README.md)
 - [文档解析组件与完整示例](src/agent_components/parsing/README.md)
 - [文档分块组件与完整示例](src/agent_components/chunking/README.md)
+- [知识库与存储适配器接入](docs/examples/knowledge-base.md)
 - [非扫描 PDF：标准解析与原生无模型解析](docs/examples/parsing.md)
 - [当前实现与待完成范围](docs/STATUS.md)
 - [本轮验证结果](docs/VALIDATION.md)
@@ -63,6 +64,8 @@ uv build
 | 执行控制 | `agent_components.execution.ExecutionController.run` | 总超时、并发、取消和显式瞬时错误重试 |
 | 状态 | `agent_components.storage.sqlite.SQLiteStateStore` | 命名空间与版本条件写入的 StateEnvelope |
 | 索引 | `agent_components.retrieval.LanceDBIndex` | 向量 upsert/查询/文档过滤与维度检查 |
+| 知识库内容 | `agent_components.knowledge_base.KnowledgeBase` | 规范文档和分块版本、发布与取消发布、读取已发布块 |
+| 存储切换 | `agent_components.storage.backends.StorageRouter` | 按请求独立选择已注册的内容仓储与向量存储 |
 | 文本检索 | `agent_components.retrieval.RetrievalPipeline.search` | 查询 Embedding、可见叶子召回、去重或 MMR、父块与邻块扩展。[接入示例](docs/examples/retrieval.md#从查询文本检索上下文) |
 | 评测 | `evaluate_schema` / `evaluate_retrieval` | Schema 和标准检索指标，不隐式调用裁判模型 |
 | AgentScope | `adapters.agentscope` | 原生模型、Context、权限、Skills 发现与 SQL 工厂 |
