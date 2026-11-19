@@ -15,7 +15,8 @@
 | 递归规则切分 | 已实现 | `strategy="recursive"`，原生 Chonkie RecursiveChunker |
 | 按分隔符切分 | 已实现 | `strategy="delimiter"`，字面分隔符可配置，支持归前块／后块 |
 | 父子块构建 | 已实现 | `ParentChildBuilder.build`，显式范围，完整预检及全局偏移 |
-| 自动按章节构造父块 | 已实现 | `SectionBuilder.build`、`ParentChildBuilder.build_sections`，读取 Docling 原生标题层级 |
+| 自动按章节构造有界父块 | 已实现 | `ParentChildBuilder.build_sections`，标题深度、独立父块字符上限及无标题回退 |
+| 重新分块与版本追溯 | 已实现 | `Rechunker.rechunk`，复用解析产物并记录解析、分块和来源版本 |
 | Token 分块 | 已实现 | `strategy="token"`，注入实际编码器，按真实 Token 预算在原文字符边界切分 |
 | 独立句子策略 | 已实现 | `strategy="sentence"`，Chonkie 句末边界；配置每片句数及硬大小上限 |
 | 语义模型分块 | 已实现 | `strategy="semantic"`，原生 Chonkie SemanticChunker＋显式向量提供方 |
@@ -116,9 +117,11 @@ size、overlap 等整数参数拒绝 bool、字符串和浮点强制转换；`0 
 
 `SectionBuilder.build(document, max_level=6, include_preamble=True)` 从 `Document.elements` 的 heading 读取 level；祖先标题存为 path。纳入的标题边界被平铺成不重叠父范围，未纳入的更深标题留在上级章节正文中。
 
-`ParentChildBuilder.build_sections` 直接组合这些范围和子策略。没有结构标题时全文视为一个分节，空文本为空结果；不会把正文中的井号当标题。需要自动章节时应传入 Docling 的 Document，或由调用方显式提供可信 DocumentElement。
+`ParentChildBuilder.build_sections` 在标题范围内生成父块，默认 `max_parent_chars=4000`，以 Python 字符计并包含重复表头。长章节及无标题文本都按此上限细分，优先保留段落、行和句末边界。没有可用边界时按字符硬切。子策略的字符或 Token 预算独立计算。没有结构标题时使用同一个有界回退规则。空文本返回空结果。
 
-显式 `build` 允许有间隙或空父范围，但先完整校验全部区间。保留表格时，任何父范围切穿表格都在子块工作前报错。每个父块内部独立切分，局部位置加父起点一次，输出全局位置与父内顺序。
+显式 `build` 使用调用方给定的父范围，允许有间隙或空范围。保留表格时，手工范围切穿表格会在分块前报错。自动分章可将长 GFM 表格按完整行分到多个父块。表头加一行或不可拆表格超出父块上限时会明确报错。提高 `max_parent_chars` 可以容纳这些表格，再按检索字符预算选择合适的父块上限。
+
+`Rechunker.rechunk(parsed, policy, section_options=...)` 复用 `ParsedDocument` 并派生新 `revision_id`。结果保存源文件摘要、解析产物摘要、解析参数、有效分块策略和 Provider 身份。知识库可保存新旧版本，以显式发布指针控制可见性。[接入示例](examples/chunking.md#复用解析产物生成新版本)
 
 ### 5.2 表格
 

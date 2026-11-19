@@ -18,6 +18,8 @@
 | `iter_pdf(path, pages_per_batch=10)` | [标准 PDF 分页批次](#按页分批解析-pdf) |
 | `from_native(native, document_id=..., revision_id=..., filename=...)` | [已有原生对象与 JSON 恢复](#适配已有-docling-文档)、[原生无模型 PDF](#读取带文本层的-pdf) |
 
+`ParsedDocument.provenance` 记录解析后端及版本、源文件 SHA-256 和已知配置。标准 PDF 记录 CPU、OCR、页范围和模型来源，可用 `DoclingParser(model_artifacts_id="...")` 关联已核对的权重清单版本。解析期间检测到源文件改写或替换时会报错，避免沿用旧摘要。外部对象可向 `from_native()` 显式传入已知记录。历史 JSON 缺少此字段时仍可读取。[重新分块与追溯](../../../docs/examples/chunking.md#复用解析产物生成新版本)
+
 以下 Python 代码块可分别保存为仓库根目录下的 `example.py`，通过 `uv run --no-sync python example.py` 运行。TXT 使用核心依赖，其他格式需要 `parsing` 依赖组。标准 PDF 另需模型目录，原生 PDF 需要一份带文本层的本地 PDF。
 
 ```sh

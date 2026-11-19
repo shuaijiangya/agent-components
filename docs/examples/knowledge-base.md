@@ -83,7 +83,7 @@ with closing(compatible_embeddings()) as embedding:
         print(window.document_id, window.revision_id, window.index_text)
 ```
 
-草稿提交后可通过 `get_revision()` 读取。SQLite 在写入前验证快照能完整读回，包含 `NaN` 或无穷大的快照会被拒绝。重复写入同一版本的相同快照幂等，内容或分块发生变化时应在分块前分配新 `revision_id`。首次发布时 `expected_revision=None`，更新或取消发布时传预期的当前版本。并发更新不匹配会抛 `RevisionConflictError`。
+草稿提交后可通过 `get_revision()` 读取。SQLite 在写入前验证快照能完整读回，包含 `NaN` 或无穷大的快照会被拒绝。重复写入同一版本的相同快照幂等。改用新分块策略时可用 `Rechunker` 从已保存的解析产物派生 `revision_id` 及追溯记录。首次发布时 `expected_revision=None`，更新或取消发布时传预期的当前版本。并发更新不匹配会抛 `RevisionConflictError`。[重新分块示例](chunking.md#复用解析产物生成新版本)
 
 向量写入失败时，已发布版本保持可见。重新写入新版本的向量后，可以再次发布。`unpublish_document()` 撤下发布指针，后续读取发布快照时不包含该文档。旧内容和向量可由调用方按保留策略清理。已取得发布快照的请求继续使用自己的快照。授权文档范围用列表或元组传入，例如 `document_ids=["contract-001"]`。
 

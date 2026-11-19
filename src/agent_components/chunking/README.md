@@ -6,7 +6,7 @@
 
 1. 校验 `ChunkPolicy`，再按策略处理正文。所有偏移使用 `Document.text` 的字符坐标，满足 `chunk.text == document.text[chunk.start:chunk.end]`。
 2. 默认保留表格。识别到表格后，表格和前后正文独立切分。超长表格按完整数据行切分，后续表格分片把表头放在 `context_prefix`。向量索引和模型输入可读 `index_text`，直接取得表头和数据行。表头加一行超过预算时，默认报错，可用 `table_overflow="allow"` 保留超长行并返回提示。
-3. 父子分块先确定父块范围，再在每个父块内按子块策略切分。`build()` 接收外部提供的范围，`build_sections()` 使用结构化标题。子块通过 `parent_id` 关联父块，自动章节模式还会保留 `section_path`。
+3. 父子分块先确定父块范围，再在每个父块内按子块策略切分。`build()` 接收外部提供的范围，`build_sections()` 使用结构化标题和独立父块字符预算。子块通过 `parent_id` 关联父块，自动章节模式还会保留 `section_path`。
 4. 大文本可用 `StreamingChunker` 做磁盘快照并逐块迭代。输入为 UTF-8 文件或文本片段，输出块带全局字符偏移。
 
 ## 使用说明
@@ -36,6 +36,7 @@ uv sync --locked --extra chunking --extra parsing --extra agent
 | `ChunkPolicy` / `ChunkResult` | [配置和结果序列化](#配置结果与稳定身份)、[表格预算](#表格分片与溢出) |
 | `ParentChildBuilder.build()` | [业务范围和部分覆盖](#手动指定父块范围) |
 | `ParentChildBuilder.build_sections()` / `SectionBuilder.build()` | [Word 章节](#word-父子分块示例)、[业务标题与序言](#显式标题与序言) |
+| `Rechunker.rechunk()` | [复用解析产物生成新版本](../../../docs/examples/chunking.md#复用解析产物生成新版本) |
 | `SourceMapper.resolve()` | [元素级来源和仅文本回退](#来源定位) |
 | `StreamingChunker.iter_file()` / `iter_text()` | [文件和分段输入](#流式分块示例)、[流式表格和资源限制](#跨窗口表格与资源上限) |
 
@@ -372,7 +373,7 @@ assert result.parents[1].section_path == ("第一章 交付", "第一节 验收"
 
 ## Word 父子分块示例
 
-此示例需要 `parsing` 依赖组，并在仓库根目录运行。`max_level=1` 以一级标题切父块，二级标题及其正文保留在所属章内。改为 `max_level=2` 时，二级标题也会开启新的父块。缺少结构化标题时，`build_sections()` 会把全文作为一个父块。
+此示例需要 `parsing` 依赖组，并在仓库根目录运行。`max_level=1` 以一级标题切父块，二级标题及其正文保留在所属章内。改为 `max_level=2` 时，二级标题也会开启新的父块。`max_parent_chars` 默认 4000，长章节和无标题文本均使用这项上限，短章节完整保留。父片保留原章节路径，父预算包含重复表头，与子块预算独立。
 
 ```python
 from pathlib import Path

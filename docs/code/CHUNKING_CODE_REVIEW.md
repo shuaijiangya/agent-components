@@ -2,21 +2,22 @@
 
 由 `scripts/export_chunking_review.py` 从真实源码生成。中文注释与代码保持原样，每节标明路径、SHA-256 和原文件行号。核心契约只节选分块相关类，其余模块完整展示；节选块不是独立可执行文件，运行请使用源码包。
 
-功能与参数见 [CHUNKING.md](../CHUNKING.md)，45 项行为对应见 [CHUNKING_REVIEW.md](../reviews/CHUNKING_REVIEW.md)。
+功能与参数见 [CHUNKING.md](../CHUNKING.md)，行为、代码与测试的对应关系见 [CHUNKING_REVIEW.md](../reviews/CHUNKING_REVIEW.md)。
 
 | 文件 | SHA-256 |
 | --- | --- |
-| `src/agent_components/core/contracts.py` | `9be72559d3b9acf6dc78dd575d6e2acdb98d5ab71c4e78f7e9c7aa56b44e3593` |
+| `src/agent_components/core/contracts.py` | `d556b77209df4794a0977b77fc63ef157d29303d89171406a8f839c9ef22d2b8` |
 | `src/agent_components/core/errors.py` | `a2254fcc0d91555952b1f44f86831ae3cde1b6593a31f5e498e04ab48c9cbbab` |
-| `src/agent_components/chunking/__init__.py` | `6a17e2a239f1e5ba34c5725c515e8416250fcd9656aa224e85643a3cfeda86ac` |
-| `src/agent_components/chunking/chunker.py` | `463a177b47cd3c4b74b5f824a0c45763aba04d1c9967fde222f78f6ffd767aaf` |
+| `src/agent_components/chunking/__init__.py` | `0789bc51387de619a2ee6fd42fc0d62f34a248f2b7520edc107d77d8279f8649` |
+| `src/agent_components/chunking/chunker.py` | `324a537283f768081c8d2e518bc1555bd2e0db090665176dca96730b33e574af` |
 | `src/agent_components/chunking/backends.py` | `2ebc46e927f5b22bddc2ac6cb026ea8c7eb5e264fcba9db2907211384313f68e` |
-| `src/agent_components/chunking/sections.py` | `388aace6929c167c2cb24da1f6694a686e90e5472d4bd959a15e4898b34c7583` |
+| `src/agent_components/chunking/sections.py` | `f895e39afbc740059268726131fe3cbdfe7ff84d2fed20eb8a5c29c95f8f4313` |
+| `src/agent_components/chunking/rechunk.py` | `a7d95767ca3c03099f512f377adf559dd48e5aec06035af81c3a23dc55e3ed8b` |
 | `src/agent_components/core/markdown_tables.py` | `5d5b541c2b177c08aa1ec29df3949a5124101fae28cb1a4ce622afd540d1c2cc` |
-| `src/agent_components/chunking/tables.py` | `c905eccf90340f9329bcbe9355457f000be3f684bd83099ed7247df1610fbbbb` |
+| `src/agent_components/chunking/tables.py` | `4b4538b19844025c52094c1bfc211455d3d87f434cd7a24983c7397f1bd81fe7` |
 | `src/agent_components/chunking/sources.py` | `c90b4cfcf42ec7d0610d94fa4a2f030a2d1965c3c96fa75d0edbf2774dbf1e0e` |
 | `src/agent_components/parsing/__init__.py` | `7ea81934a00b3777b7bb827eb8dc78b599e2a664f3fbf5ca7433119880124190` |
-| `src/agent_components/parsing/docling.py` | `6af72cd920f92bc2e47b008ada535c202dd8b3bfe5337a92527c91ef775c4ea9` |
+| `src/agent_components/parsing/docling.py` | `f28a7d3daf4d717dd564eb56101ba68d84a48dd34a0302be39acff567731d4f4` |
 | `src/agent_components/chunking/streaming.py` | `22aa613a2391cdb6b750c90b87a4208f8ff9b82f9148b9e02af08b3fd4ed9deb` |
 | `src/agent_components/retrieval/context.py` | `0ae7cfc7db209b20097ab4e43579d99287e372166188ebcb5475c59109b8a80a` |
 | `src/agent_components/retrieval/selection.py` | `fb95409280c2c7c8eb3cbe3606cad9105d36c24de5d4309e7756f5f2de4233bb` |
@@ -301,7 +302,22 @@ class ChunkResult(Contract):
         return tuple(item for item in self.chunks if item.kind == "leaf")
 ````
 
-### ParsedDocument（原文件第 260 行）
+### ParseProvenance（原文件第 260 行）
+
+````python
+class ParseProvenance(Contract):
+    """记录解析产物的来源摘要、后端和已知解析配置。
+
+    外部原生对象或历史产物可能缺少配置和源文件摘要，缺失值表示未知。
+    """
+
+    backend: str = Field(min_length=1)
+    backend_version: str | None = None
+    source_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    options: dict[str, JsonValue] | None = None
+````
+
+### ParsedDocument（原文件第 272 行）
 
 ````python
 class ParsedDocument(Contract):
@@ -314,6 +330,7 @@ class ParsedDocument(Contract):
     markdown: str
     native_json: dict[str, JsonValue]
     source_mapping: Literal["text_only", "mapped"] = "text_only"
+    provenance: ParseProvenance | None = None
 ````
 
 
@@ -417,7 +434,8 @@ class RetryableError(ComponentError):
 
 from agent_components.chunking.backends import EmbeddingProvider, TokenEncoder
 from agent_components.chunking.chunker import Chunker, ChunkPolicy, ParentChildBuilder
-from agent_components.chunking.sections import Section, SectionBuilder
+from agent_components.chunking.rechunk import RechunkedDocument, Rechunker, RechunkTrace
+from agent_components.chunking.sections import Section, SectionBuilder, SectionOptions
 from agent_components.chunking.sources import SourceMapper
 from agent_components.chunking.streaming import StreamingChunker
 
@@ -426,8 +444,12 @@ __all__ = [
     "Chunker",
     "EmbeddingProvider",
     "ParentChildBuilder",
+    "RechunkedDocument",
+    "Rechunker",
+    "RechunkTrace",
     "Section",
     "SectionBuilder",
+    "SectionOptions",
     "SourceMapper",
     "StreamingChunker",
     "TokenEncoder",
@@ -463,7 +485,13 @@ from agent_components.chunking.backends import (
     token_count,
     token_spans,
 )
-from agent_components.chunking.sections import SectionBuilder
+from agent_components.chunking.sections import (
+    _SECTION_LAYOUT_VERSION,
+    DEFAULT_MAX_PARENT_CHARS,
+    SectionBuilder,
+    SectionOptions,
+    _bounded_parents,
+)
 from agent_components.chunking.sources import SourceMapper
 from agent_components.chunking.tables import SpanPiece, split_table
 from agent_components.core.contracts import (
@@ -471,6 +499,7 @@ from agent_components.core.contracts import (
     ChunkResult,
     Contract,
     Document,
+    DocumentElement,
     Issue,
     TableSlice,
 )
@@ -589,6 +618,7 @@ def _chunk(
     parent_id: str | None = None,
     ordinal_in_parent: int | None = None,
     kind: Literal["parent", "leaf"] = "leaf",
+    section_path: tuple[str, ...] = (),
     mapper: SourceMapper | None = None,
     prefix: str = "",
     table: TableSlice | None = None,
@@ -606,6 +636,7 @@ def _chunk(
         parent_id: 叶子块所属父块 ID。
         ordinal_in_parent: 子块在所属父块内从零开始的顺序。
         kind: parent 或 leaf。
+        section_path: 自动章节父块及其子块的标题路径。
         mapper: 可复用的全文来源索引。
         prefix: 表格后续分片重复的表头。
         table: 表格数据行范围与表头来源。
@@ -637,6 +668,7 @@ def _chunk(
         kind=kind,
         parent_id=parent_id,
         ordinal_in_parent=ordinal_in_parent,
+        section_path=section_path,
         context_prefix=prefix,
         table=table,
         source_refs=tuple(
@@ -649,6 +681,25 @@ def _chunk(
             for ref in (mapper or SourceMapper(document)).resolve(start, end)
         ),
     )
+
+
+def _table_ranges(
+    document: Document, preserve: bool, *, include_markdown_gaps: bool = False
+) -> list[tuple[int, int, str]]:
+    if not preserve:
+        return []
+    tables = [(e.start, e.end, e.id) for e in document.elements if e.kind == "table"]
+    if tables and not include_markdown_gaps:
+        return tables
+    # 父块规划保留原生表格，并补充不与原生表格相交的 GFM 表格。
+    # 在全文中扫描，避免子范围裁掉 Markdown 围栏后把代码误认成表格。
+    native_ends = tuple(end for _, end, _ in tables)
+    markdown = []
+    for start, end in markdown_table_ranges(document.text):
+        index = bisect_right(native_ends, start)
+        if index == len(tables) or tables[index][0] >= end:
+            markdown.append((start, end, f"markdown-table:{start}"))
+    return sorted([*tables, *markdown])
 
 
 def _source_warnings(document: Document) -> tuple[Issue, ...]:
@@ -781,6 +832,10 @@ class Chunker:
         Raises:
             ValueError: token 或 semantic 策略没有配置所需能力。
         """
+        return _fingerprint(policy, ranges, self._backend_identity(policy))
+
+    def _backend_identity(self, policy: ChunkPolicy) -> dict[str, str]:
+        """读取实际启用的分词器或向量提供方身份。"""
         identity = {}
         if policy.strategy == "token":
             if self._tokenizer is None or self._tokenizer_id is None:
@@ -790,7 +845,7 @@ class Chunker:
             if self._embedding is None or self._embedding_id is None:
                 raise ValueError("semantic strategy requires embedding and embedding_id")
             identity["embedding"] = self._embedding_id
-        return _fingerprint(policy, ranges, identity)
+        return identity
 
     def _measure(self, text: str, policy: ChunkPolicy) -> int:
         """按策略选择实际 Token 或字符计量。
@@ -880,13 +935,7 @@ class Chunker:
         Returns:
             按原文顺序排列的正文区间、重复表头及表格行元数据。
         """
-        tables = []
-        if policy.preserve_tables:
-            tables = [(e.start, e.end, e.id) for e in document.elements if e.kind == "table"]
-            if not tables:
-                tables = [
-                    (a, b, f"markdown-table:{a}") for a, b in markdown_table_ranges(document.text)
-                ]
+        tables = _table_ranges(document, policy.preserve_tables)
         pieces: list[SpanPiece] = []
         position = 0
         for start, end, table_id in tables:
@@ -1002,7 +1051,7 @@ def _validated_ranges(
 class ParentChildBuilder:
     """在调用方给定的父块范围内独立切子块，并转换为原文绝对偏移。
 
-    build 接收显式范围，build_sections 委托结构分节组件。父块不受子策略大小限制。
+    build 接收显式范围，build_sections 按独立字符预算生成父块。
     未被选入父范围的文本不会自动加入输出；实际范围随结果返回。
     """
 
@@ -1038,25 +1087,65 @@ class ParentChildBuilder:
         """
         child_policy = _validated_policy(child_policy)
         ranges = _validated_ranges(parent_ranges, len(document.text))
+        tables = _table_ranges(document, child_policy.preserve_tables, include_markdown_gaps=True)
+        return self._build(
+            document, [(SpanPiece(start, end), ()) for start, end in ranges], child_policy, tables
+        )
+
+    def _build(
+        self,
+        document: Document,
+        parents: Sequence[tuple[SpanPiece, tuple[str, ...]]],
+        child_policy: ChunkPolicy,
+        tables: Sequence[tuple[int, int, str]],
+        *,
+        section_options: SectionOptions | None = None,
+    ) -> ChunkResult:
+        ranges = tuple((piece.start, piece.end) for piece, _ in parents)
         fingerprint = self._chunker.configuration_fingerprint(child_policy, ranges)
+        if section_options is not None:
+            identity = [fingerprint, _SECTION_LAYOUT_VERSION, section_options.model_dump()]
+            fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         mapper = SourceMapper(document)
         warnings = list(_source_warnings(document))
         content_digest = hashlib.sha256(document.text.encode()).hexdigest()
         all_chunks: list[Chunk] = []
-        if child_policy.preserve_tables:
-            protected = [(e.start, e.end) for e in document.elements if e.kind == "table"]
-            if not protected:
-                protected = markdown_table_ranges(document.text)
-            protected_ends = tuple(right for _, right in protected)
-            for start, end in ranges:
-                for left, right in islice(protected, bisect_right(protected_ends, start), None):
-                    if left >= end:
+        table_ends = tuple(end for _, end, _ in tables)
+        # 在任何子块工作前锁定全局识别到的表格，避免子范围丢失 Markdown 围栏状态。
+        local_tables = []
+        for piece, _ in parents:
+            structures = []
+            if piece.table is not None:
+                structures.append(
+                    DocumentElement(
+                        id=piece.table.table_id,
+                        kind="table",
+                        start=0,
+                        end=piece.end - piece.start + len(piece.prefix),
+                    )
+                )
+            else:
+                for left, right, table_id in islice(
+                    tables, bisect_right(table_ends, piece.start), None
+                ):
+                    if left >= piece.end:
                         break
-                    if not (start <= left and right <= end):
+                    if not (piece.start <= left and right <= piece.end):
                         raise ValueError("parent range cuts through a preserved table")
+                    structures.append(
+                        DocumentElement(
+                            id=table_id,
+                            kind="table",
+                            start=left - piece.start,
+                            end=right - piece.start,
+                        )
+                    )
+            local_tables.append(tuple(structures))
         leaf_ordinal = 0
-        element_ends = tuple(element.end for element in document.elements)
-        for parent_ordinal, (start, end) in enumerate(ranges):
+        for parent_ordinal, ((piece, path), local_elements) in enumerate(
+            zip(parents, local_tables, strict=True)
+        ):
+            start, end = piece.start, piece.end
             parent = _chunk(
                 document,
                 start,
@@ -1065,59 +1154,58 @@ class ParentChildBuilder:
                 fingerprint,
                 content_digest,
                 kind="parent",
+                section_path=path,
                 mapper=mapper,
+                prefix=piece.prefix,
+                table=piece.table,
             )
             all_chunks.append(parent)
-            local_elements = []
-            for element in islice(document.elements, bisect_right(element_ends, start), None):
-                if element.start >= end:
-                    break
-                if (
-                    child_policy.preserve_tables
-                    and element.kind == "table"
-                    and not (start <= element.start and element.end <= end)
-                ):
-                    raise ValueError("parent range cuts through a preserved table")
-                if start <= element.start and element.end <= end:
-                    local_elements.append(
-                        element.model_copy(
-                            update={"start": element.start - start, "end": element.end - start}
-                        )
-                    )
             subdocument = Document(
                 id=document.id,
                 revision_id=document.revision_id,
-                text=document.text[start:end],
-                elements=tuple(local_elements),
+                text=piece.prefix + document.text[start:end],
+                elements=local_elements,
             )
-            children = self._chunker.chunk(subdocument, child_policy)
+            local_policy = (
+                child_policy
+                if local_elements
+                else child_policy.model_copy(update={"preserve_tables": False})
+            )
+            children = self._chunker.chunk(subdocument, local_policy)
             child_ids: dict[str, str] = {}
+            prefix_length = len(piece.prefix)
             for local_ordinal, child in enumerate(children.leaves):
+                table = child.table
+                if table is not None and piece.table is not None:
+                    # 临时表头只用于预算。真实表头位置及数据行序号沿用父片的全局信息。
+                    table = piece.table.model_copy(
+                        update={
+                            "row_start": piece.table.row_start + table.row_start,
+                            "row_end": piece.table.row_start + table.row_end,
+                            "oversized": table.oversized,
+                        }
+                    )
+                elif table is not None:
+                    table = table.model_copy(
+                        update={
+                            "header_start": start + table.header_start,
+                            "header_end": start + table.header_end,
+                        }
+                    )
                 all_chunks.append(
                     _chunk(
                         document,
-                        start + child.start,
-                        start + child.end,
+                        start + max(0, child.start - prefix_length),
+                        start + child.end - prefix_length,
                         leaf_ordinal,
                         fingerprint,
                         content_digest,
                         parent_id=parent.id,
                         ordinal_in_parent=local_ordinal,
+                        section_path=path,
                         mapper=mapper,
-                        prefix=child.context_prefix,
-                        table=None
-                        if child.table is None
-                        else child.table.model_copy(
-                            update={
-                                "table_id": (
-                                    f"markdown-table:{start + child.table.header_start}"
-                                    if child.table.table_id.startswith("markdown-table:")
-                                    else child.table.table_id
-                                ),
-                                "header_start": start + child.table.header_start,
-                                "header_end": start + child.table.header_end,
-                            }
-                        ),
+                        prefix=child.context_prefix or piece.prefix,
+                        table=table,
                     )
                 )
                 child_ids[child.id] = all_chunks[-1].id
@@ -1143,6 +1231,7 @@ class ParentChildBuilder:
         *,
         max_level: int = 6,
         include_preamble: bool = True,
+        max_parent_chars: int = DEFAULT_MAX_PARENT_CHARS,
     ) -> ChunkResult:
         """按原生 Docling 标题结构自动构建章节父子块。
 
@@ -1151,34 +1240,23 @@ class ParentChildBuilder:
             child_policy: 每个章节内部执行的子策略。
             max_level: 纳入分节边界的最大标题层级。
             include_preamble: 是否保留首个标题之前的序言。
+            max_parent_chars: 父块字符上限，包含重复表头，与子策略预算独立。
 
         Returns:
             章节父块及其子块；标题层级路径存于每块 section_path。
         """
+        options = SectionOptions(
+            max_level=max_level,
+            include_preamble=include_preamble,
+            max_parent_chars=max_parent_chars,
+        )
+        child_policy = _validated_policy(child_policy)
         sections = SectionBuilder().build(
-            document, max_level=max_level, include_preamble=include_preamble
+            document, max_level=options.max_level, include_preamble=options.include_preamble
         )
-        result = self.build(
-            document, [(section.start, section.end) for section in sections], child_policy
-        )
-        paths = {
-            parent.id: section.path
-            for parent, section in zip(result.parents, sections, strict=True)
-        }
-        return result.model_copy(
-            update={
-                "chunks": tuple(
-                    chunk.model_copy(
-                        update={
-                            "section_path": paths[
-                                chunk.id if chunk.kind == "parent" else str(chunk.parent_id)
-                            ]
-                        }
-                    )
-                    for chunk in result.chunks
-                )
-            }
-        )
+        tables = _table_ranges(document, child_policy.preserve_tables, include_markdown_gaps=True)
+        parents = _bounded_parents(document, sections, tables, options.max_parent_chars)
+        return self._build(document, parents, child_policy, tables, section_options=options)
 ````
 
 ## src/agent_components/chunking/backends.py
@@ -1491,7 +1569,27 @@ def semantic_spans(
 不通过 Markdown 的井号或文本相似度推测标题，保留完整层级路径。
 """
 
+from bisect import bisect_right
+from collections.abc import Iterator, Sequence
+
+from pydantic import Field
+
+from agent_components.chunking.tables import SpanPiece, split_table
 from agent_components.core.contracts import Contract, Document
+
+DEFAULT_MAX_PARENT_CHARS = 4000
+_SECTION_LAYOUT_VERSION = "bounded-sections-v1"
+
+
+class SectionOptions(Contract):
+    """配置章节识别和自动父块的字符预算。
+
+    max_parent_chars 包含表格的重复表头，与子块字符或 Token 预算独立。
+    """
+
+    max_level: int = Field(default=6, ge=1, strict=True)
+    include_preamble: bool = True
+    max_parent_chars: int = Field(default=DEFAULT_MAX_PARENT_CHARS, ge=1, strict=True)
 
 
 class Section(Contract):
@@ -1562,6 +1660,214 @@ class SectionBuilder:
                 )
             )
         return tuple(sections)
+
+
+def _body_pieces(text: str, start: int, end: int, limit: int) -> Iterator[SpanPiece]:
+    """在窗口后半段优先使用段落、行或句末边界，否则按字符上限切开。"""
+    while start < end:
+        stop = min(start + limit, end)
+        if stop < end:
+            floor = start + limit // 2
+            for delimiters in (("\n\n",), ("\n",), ("。", "！", "？", ". ", "! ", "? ")):
+                candidates = [(text.rfind(d, floor, stop), len(d)) for d in delimiters]
+                boundary = max((pos + size for pos, size in candidates if pos >= 0), default=0)
+                if boundary:
+                    stop = boundary
+                    break
+        yield SpanPiece(start, stop)
+        start = stop
+
+
+def _bounded_parents(
+    document: Document,
+    sections: Sequence[Section],
+    tables: Sequence[tuple[int, int, str]],
+    limit: int,
+) -> tuple[tuple[SpanPiece, tuple[str, ...]], ...]:
+    """为章节父块生成有界范围，长表格按完整行分片。
+
+    章节路径沿用原标题。表格父片的正文取原文，后续片另携带重复表头。
+    若一行加表头仍超过父预算，抛出错误，避免悄悄产生超预算的父块。
+    """
+    result = []
+    table_ends = tuple(end for _, end, _ in tables)
+    for section in sections:
+        section_tables = []
+        for index in range(bisect_right(table_ends, section.start), len(tables)):
+            start, end, table_id = tables[index]
+            if start >= section.end:
+                break
+            if not section.start <= start < end <= section.end:
+                raise ValueError("section boundary cuts through a preserved table")
+            section_tables.append((start, end, table_id))
+        if section.end - section.start <= limit:
+            result.append((SpanPiece(section.start, section.end), section.path))
+            continue
+        position = section.start
+        for start, end, table_id in section_tables:
+            result.extend(
+                (p, section.path) for p in _body_pieces(document.text, position, start, limit)
+            )
+            try:
+                parts = split_table(
+                    document.text, start, end, table_id, size=limit, measure=len, overflow="error"
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "preserved table row or indivisible table exceeds max_parent_chars"
+                ) from exc
+            result.extend((p, section.path) for p in parts)
+            position = end
+        result.extend(
+            (p, section.path) for p in _body_pieces(document.text, position, section.end, limit)
+        )
+    return tuple(result)
+````
+
+## src/agent_components/chunking/rechunk.py
+
+[打开完整源码](../../src/agent_components/chunking/rechunk.py)
+
+````python
+"""从已保存的解析产物生成可追溯的分块版本。"""
+
+import hashlib
+import json
+
+from agent_components.chunking.chunker import Chunker, ChunkPolicy, ParentChildBuilder
+from agent_components.chunking.sections import _SECTION_LAYOUT_VERSION, SectionOptions
+from agent_components.core.contracts import (
+    ChunkResult,
+    Contract,
+    Document,
+    ParsedDocument,
+    ParseProvenance,
+)
+
+_TRACE_METADATA_KEY = "agent_components.rechunk"
+
+
+def _digest(value: object) -> str:
+    encoded = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, allow_nan=False, separators=(",", ":")
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+class RechunkTrace(Contract):
+    """记录分块版本的输入产物、配置以及可选的前一版本。
+
+    artifact_sha256 对规范 JSON 计算，等价的键顺序和格式不会改变摘要。
+    parsing=None 表示历史产物缺少解析记录。artifact_ref 由调用方提供并管理。
+    """
+
+    source_document_id: str
+    source_revision_id: str
+    artifact_sha256: str
+    artifact_ref: str | None = None
+    previous_revision_id: str | None = None
+    parsing: ParseProvenance | None = None
+    chunk_policy: ChunkPolicy
+    section_options: SectionOptions | None = None
+    backend_ids: dict[str, str]
+    chunk_config_fingerprint: str
+
+    def matches_artifact(self, parsed: ParsedDocument) -> bool:
+        """检查读取的解析产物是否为本次分块使用的原始快照。"""
+        return _digest(parsed.model_dump(mode="json")) == self.artifact_sha256
+
+
+class RechunkedDocument(Contract):
+    """返回可直接保存的文档、分块及追溯记录。"""
+
+    document: Document
+    chunks: ChunkResult
+    trace: RechunkTrace
+
+
+class Rechunker:
+    """为已解析内容生成独立版本，并复用与普通分块相同的 Provider。"""
+
+    def __init__(self, chunker: Chunker | None = None) -> None:
+        """绑定可选的分块器及其实际 Tokenizer 或 Embedding Provider。"""
+        self._chunker = chunker or Chunker()
+
+    def rechunk(
+        self,
+        parsed: ParsedDocument,
+        policy: ChunkPolicy,
+        *,
+        section_options: SectionOptions | None = None,
+        artifact_ref: str | None = None,
+        previous_revision_id: str | None = None,
+    ) -> RechunkedDocument:
+        """只读取解析产物，产生可与旧分块共存的版本。
+
+        Args:
+            parsed: 原先保存的 ParsedDocument，可通过 JSON 恢复，无需原文件或解析器。
+            policy: 这次使用的分块策略，包含实际策略参数。
+            section_options: 提供时生成有界章节父子块，省略时仅生成叶子。
+            artifact_ref: 调用方稳定保存的产物引用。组件不访问该引用。
+            previous_revision_id: 可选的前一次分块版本，由调用方指定。
+
+        Returns:
+            具有派生版本 ID 的 Document、ChunkResult 及追溯记录。
+            同一产物、追溯引用、策略与 Provider 标识会得到相同版本 ID。
+        """
+        policy = ChunkPolicy.model_validate(policy.model_dump())
+        if section_options is not None:
+            section_options = SectionOptions.model_validate(section_options.model_dump())
+        # Contract 只冻结外层字段。摘要、解析配置及派生文档都从隔离后的同一快照读取。
+        parsed = parsed.model_copy(deep=True)
+        if _TRACE_METADATA_KEY in parsed.document.metadata:
+            raise ValueError(f"source metadata uses reserved key {_TRACE_METADATA_KEY!r}")
+        artifact_digest = _digest(parsed.model_dump(mode="json"))
+        base_config = self._chunker.configuration_fingerprint(policy)
+        revision_digest = _digest(
+            [
+                "rechunk-v1",
+                artifact_digest,
+                base_config,
+                None
+                if section_options is None
+                else [
+                    _SECTION_LAYOUT_VERSION,
+                    section_options.model_dump(mode="json"),
+                ],
+                artifact_ref,
+                previous_revision_id,
+            ]
+        )
+        doc = parsed.document.model_copy(update={"revision_id": f"rechunk-{revision_digest}"})
+        if section_options is None:
+            chunks = self._chunker.chunk(doc, policy)
+        else:
+            chunks = ParentChildBuilder(self._chunker).build_sections(
+                doc,
+                policy,
+                max_level=section_options.max_level,
+                include_preamble=section_options.include_preamble,
+                max_parent_chars=section_options.max_parent_chars,
+            )
+        trace = RechunkTrace(
+            source_document_id=parsed.document.id,
+            source_revision_id=parsed.document.revision_id,
+            artifact_sha256=artifact_digest,
+            artifact_ref=artifact_ref,
+            previous_revision_id=previous_revision_id,
+            parsing=parsed.provenance,
+            chunk_policy=policy,
+            section_options=section_options,
+            backend_ids=self._chunker._backend_identity(policy),
+            chunk_config_fingerprint=chunks.config_fingerprint,
+        )
+        # 文件来源仍指向原解析产物。规范文本引用由分块器写入新的文档版本。
+        doc = doc.model_copy(
+            update={
+                "metadata": {**doc.metadata, _TRACE_METADATA_KEY: trace.model_dump(mode="json")}
+            }
+        )
+        return RechunkedDocument(document=doc, chunks=chunks, trace=trace)
 ````
 
 ## src/agent_components/core/markdown_tables.py
@@ -1696,8 +2002,6 @@ def split_table(
         ]
     header_end = start + sum(map(len, lines[:header_lines]))
     header = text[start:header_end]
-    # 原文末尾表头无换行时，也要保证重复前缀与数据行分隔；不改变原文正文。
-    prefix = header if header.endswith(("\n", "\r")) else header + "\n"
     positions = [header_end]
     for line in lines[header_lines:]:
         positions.append(positions[-1] + len(line))
@@ -1705,7 +2009,8 @@ def split_table(
     row = 0
     while row < len(positions) - 1 or (row == 0 and not pieces):
         left = start if not pieces else positions[row]
-        extra = "" if not pieces else prefix
+        # 有后续行时表头已经含原文行终止符，包括 U+2028 等 Unicode 分隔符。
+        extra = "" if not pieces else header
         stop = row
         while (
             stop < len(positions) - 1
@@ -1837,7 +2142,9 @@ __all__ = ["DoclingParser"]
 """
 
 import hashlib
+import os
 from collections.abc import Iterable, Iterator
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, cast
 
@@ -1847,11 +2154,44 @@ from agent_components.core.contracts import (
     Document,
     DocumentElement,
     ParsedDocument,
+    ParseProvenance,
     SourceRef,
     SourceSpan,
 )
 from agent_components.core.errors import MissingDependencyError
 from agent_components.core.markdown_tables import markdown_table_ranges
+
+
+def _installed_version(distribution: str) -> str | None:
+    try:
+        return version(distribution)
+    except PackageNotFoundError:
+        return None
+
+
+type _SourceIdentity = tuple[int, int, int, int, int]
+
+
+def _source_identity(stat: os.stat_result) -> _SourceIdentity:
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+
+def _check_source(path: Path, identity: _SourceIdentity) -> None:
+    try:
+        current = _source_identity(path.stat())
+    except FileNotFoundError as exc:
+        raise ValueError("source changed during document parsing") from exc
+    if current != identity:
+        raise ValueError("source changed during document parsing")
+
+
+def _digest_source(path: Path) -> tuple[str, _SourceIdentity]:
+    """计算原文件摘要并记录身份，供转换前后检查源文件替换或改写。"""
+    with path.open("rb") as reader:
+        identity = _source_identity(os.fstat(reader.fileno()))
+        digest = hashlib.file_digest(reader, "sha256").hexdigest()
+        _check_source(path, identity)
+    return digest, identity
 
 
 class DoclingParser:
@@ -1866,6 +2206,7 @@ class DoclingParser:
         artifacts_path: Path | None = None,
         allow_model_downloads: bool = False,
         do_ocr: bool = False,
+        model_artifacts_id: str | None = None,
     ) -> None:
         """配置解析资源和 PDF 行为。
 
@@ -1873,10 +2214,12 @@ class DoclingParser:
             artifacts_path: PDF 所需离线模型目录。
             allow_model_downloads: 是否允许 PDF 未指定本地目录时由后端获取模型。
             do_ocr: 是否启用 PDF OCR；默认关闭。
+            model_artifacts_id: 可选的模型产物版本或清单摘要，用于 PDF 解析追溯。
         """
         self._artifacts = artifacts_path
         self._allow_downloads = allow_model_downloads
         self._do_ocr = do_ocr
+        self._model_artifacts_id = model_artifacts_id
 
     def parse(self, path: Path, *, document_id: str | None = None) -> ParsedDocument:
         """读取本地文件并构造规范文本。
@@ -1889,7 +2232,7 @@ class DoclingParser:
             Document、Markdown、原生 JSON；revision_id 为文件内容摘要。
 
         Raises:
-            ValueError: 不支持扩展名或离线 PDF 缺少现有模型目录。
+            ValueError: 不支持扩展名、离线 PDF 缺少模型目录或源文件发生变化。
             MissingDependencyError: 非 TXT 解析未安装 parsing extra。
             OSError: 文件读取失败。
 
@@ -1897,12 +2240,12 @@ class DoclingParser:
             来源按原生元素精度映射；存在目录不代表已验证全部 PDF 权重完整。
         """
         path = Path(path)
-        with path.open("rb") as reader:
-            digest = hashlib.file_digest(reader, "sha256").hexdigest()
+        digest, identity = _digest_source(path)
         document_id = document_id or digest
         if path.suffix.lower() == ".txt":
             with path.open(encoding="utf-8-sig", newline="") as reader:
                 text = reader.read()
+            _check_source(path, identity)
             return ParsedDocument(
                 document=Document(
                     id=document_id,
@@ -1912,11 +2255,44 @@ class DoclingParser:
                 ),
                 markdown=text,
                 native_json={"adapter": "plain_text", "text": text},
+                provenance=ParseProvenance(
+                    backend="plain_text",
+                    backend_version="1",
+                    source_sha256=digest,
+                    options={"encoding": "utf-8-sig", "preserve_newlines": True},
+                ),
             )
         converter = self._converter(path)
+        _check_source(path, identity)
         result = converter.convert(path, raises_on_error=True)
+        _check_source(path, identity)
         return self.from_native(
-            result.document, document_id=document_id, revision_id=digest, filename=path.name
+            result.document,
+            document_id=document_id,
+            revision_id=digest,
+            filename=path.name,
+            provenance=self._provenance(path, digest),
+        )
+
+    def _provenance(
+        self, path: Path, digest: str, *, page_range: tuple[int, int] | None = None
+    ) -> ParseProvenance:
+        suffix = path.suffix.lower()
+        options: dict[str, JsonValue] = {"format": suffix.removeprefix(".")}
+        if suffix == ".pdf":
+            options.update(
+                accelerator="cpu",
+                do_ocr=self._do_ocr,
+                allow_model_downloads=self._allow_downloads,
+                model_artifacts_id=self._model_artifacts_id,
+                model_source="local" if self._artifacts is not None else "backend_default",
+                page_range=None if page_range is None else list(page_range),
+            )
+        return ParseProvenance(
+            backend="docling",
+            backend_version=_installed_version("docling"),
+            source_sha256=digest,
+            options=options,
         )
 
     def _converter(self, path: Path) -> Any:
@@ -1990,7 +2366,7 @@ class DoclingParser:
             元素来源页码由 Docling 提供，不将跨批表格或章节自行拼接。
 
         Raises:
-            ValueError: 格式、批大小无效或离线资源未配置。
+            ValueError: 格式或批大小无效、离线资源未配置或源文件发生变化。
             MissingDependencyError: 未安装解析后端。
 
         Notes:
@@ -2004,22 +2380,25 @@ class DoclingParser:
             import pypdfium2
         except ImportError as exc:
             raise MissingDependencyError("parsing") from exc
-        with path.open("rb") as reader:
-            digest = hashlib.file_digest(reader, "sha256").hexdigest()
+        digest, identity = _digest_source(path)
         pdf = pypdfium2.PdfDocument(str(path))
         try:
             page_count = len(pdf)
         finally:
             pdf.close()
+        _check_source(path, identity)
         source_id = document_id or digest
         for first in range(1, page_count + 1, pages_per_batch):
             last = min(first + pages_per_batch - 1, page_count)
+            _check_source(path, identity)
             converted = converter.convert(path, raises_on_error=True, page_range=(first, last))
+            _check_source(path, identity)
             parsed = self.from_native(
                 converted.document,
                 document_id=f"{source_id}#pages={first}-{last}",
                 revision_id=digest,
                 filename=path.name,
+                provenance=self._provenance(path, digest, page_range=(first, last)),
             )
             # 分批产物不能共用全局 ordinal；独立分段 ID 防止索引和上下文版本混用。
             document = parsed.document.model_copy(
@@ -2035,7 +2414,13 @@ class DoclingParser:
             yield parsed.model_copy(update={"document": document})
 
     def from_native(
-        self, native: Any, *, document_id: str, revision_id: str, filename: str = ""
+        self,
+        native: Any,
+        *,
+        document_id: str,
+        revision_id: str,
+        filename: str = "",
+        provenance: ParseProvenance | None = None,
     ) -> ParsedDocument:
         """把原生 DoclingDocument 转换为可映射的规范 Markdown。
 
@@ -2044,6 +2429,7 @@ class DoclingParser:
             document_id: 调用方的文档身份。
             revision_id: 原文件或原生 JSON 的内容版本。
             filename: 可选的原文件名。
+            provenance: 上游已知解析记录，省略时仅记录原生序列化后端。
 
         Returns:
             具有结构元素和 SourceMap 的文档；映射精度明确为原生元素级。
@@ -2148,6 +2534,10 @@ class DoclingParser:
             markdown=text,
             native_json=cast(dict[str, JsonValue], native.export_to_dict()),
             source_mapping="mapped" if source_map else "text_only",
+            provenance=provenance
+            or ParseProvenance(
+                backend="docling-native", backend_version=_installed_version("docling-core")
+            ),
         )
 ````
 

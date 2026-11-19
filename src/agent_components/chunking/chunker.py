@@ -22,7 +22,13 @@ from agent_components.chunking.backends import (
     token_count,
     token_spans,
 )
-from agent_components.chunking.sections import SectionBuilder
+from agent_components.chunking.sections import (
+    _SECTION_LAYOUT_VERSION,
+    DEFAULT_MAX_PARENT_CHARS,
+    SectionBuilder,
+    SectionOptions,
+    _bounded_parents,
+)
 from agent_components.chunking.sources import SourceMapper
 from agent_components.chunking.tables import SpanPiece, split_table
 from agent_components.core.contracts import (
@@ -30,6 +36,7 @@ from agent_components.core.contracts import (
     ChunkResult,
     Contract,
     Document,
+    DocumentElement,
     Issue,
     TableSlice,
 )
@@ -148,6 +155,7 @@ def _chunk(
     parent_id: str | None = None,
     ordinal_in_parent: int | None = None,
     kind: Literal["parent", "leaf"] = "leaf",
+    section_path: tuple[str, ...] = (),
     mapper: SourceMapper | None = None,
     prefix: str = "",
     table: TableSlice | None = None,
@@ -165,6 +173,7 @@ def _chunk(
         parent_id: 叶子块所属父块 ID。
         ordinal_in_parent: 子块在所属父块内从零开始的顺序。
         kind: parent 或 leaf。
+        section_path: 自动章节父块及其子块的标题路径。
         mapper: 可复用的全文来源索引。
         prefix: 表格后续分片重复的表头。
         table: 表格数据行范围与表头来源。
@@ -196,6 +205,7 @@ def _chunk(
         kind=kind,
         parent_id=parent_id,
         ordinal_in_parent=ordinal_in_parent,
+        section_path=section_path,
         context_prefix=prefix,
         table=table,
         source_refs=tuple(
@@ -208,6 +218,25 @@ def _chunk(
             for ref in (mapper or SourceMapper(document)).resolve(start, end)
         ),
     )
+
+
+def _table_ranges(
+    document: Document, preserve: bool, *, include_markdown_gaps: bool = False
+) -> list[tuple[int, int, str]]:
+    if not preserve:
+        return []
+    tables = [(e.start, e.end, e.id) for e in document.elements if e.kind == "table"]
+    if tables and not include_markdown_gaps:
+        return tables
+    # 父块规划保留原生表格，并补充不与原生表格相交的 GFM 表格。
+    # 在全文中扫描，避免子范围裁掉 Markdown 围栏后把代码误认成表格。
+    native_ends = tuple(end for _, end, _ in tables)
+    markdown = []
+    for start, end in markdown_table_ranges(document.text):
+        index = bisect_right(native_ends, start)
+        if index == len(tables) or tables[index][0] >= end:
+            markdown.append((start, end, f"markdown-table:{start}"))
+    return sorted([*tables, *markdown])
 
 
 def _source_warnings(document: Document) -> tuple[Issue, ...]:
@@ -340,6 +369,10 @@ class Chunker:
         Raises:
             ValueError: token 或 semantic 策略没有配置所需能力。
         """
+        return _fingerprint(policy, ranges, self._backend_identity(policy))
+
+    def _backend_identity(self, policy: ChunkPolicy) -> dict[str, str]:
+        """读取实际启用的分词器或向量提供方身份。"""
         identity = {}
         if policy.strategy == "token":
             if self._tokenizer is None or self._tokenizer_id is None:
@@ -349,7 +382,7 @@ class Chunker:
             if self._embedding is None or self._embedding_id is None:
                 raise ValueError("semantic strategy requires embedding and embedding_id")
             identity["embedding"] = self._embedding_id
-        return _fingerprint(policy, ranges, identity)
+        return identity
 
     def _measure(self, text: str, policy: ChunkPolicy) -> int:
         """按策略选择实际 Token 或字符计量。
@@ -439,13 +472,7 @@ class Chunker:
         Returns:
             按原文顺序排列的正文区间、重复表头及表格行元数据。
         """
-        tables = []
-        if policy.preserve_tables:
-            tables = [(e.start, e.end, e.id) for e in document.elements if e.kind == "table"]
-            if not tables:
-                tables = [
-                    (a, b, f"markdown-table:{a}") for a, b in markdown_table_ranges(document.text)
-                ]
+        tables = _table_ranges(document, policy.preserve_tables)
         pieces: list[SpanPiece] = []
         position = 0
         for start, end, table_id in tables:
@@ -561,7 +588,7 @@ def _validated_ranges(
 class ParentChildBuilder:
     """在调用方给定的父块范围内独立切子块，并转换为原文绝对偏移。
 
-    build 接收显式范围，build_sections 委托结构分节组件。父块不受子策略大小限制。
+    build 接收显式范围，build_sections 按独立字符预算生成父块。
     未被选入父范围的文本不会自动加入输出；实际范围随结果返回。
     """
 
@@ -597,25 +624,65 @@ class ParentChildBuilder:
         """
         child_policy = _validated_policy(child_policy)
         ranges = _validated_ranges(parent_ranges, len(document.text))
+        tables = _table_ranges(document, child_policy.preserve_tables, include_markdown_gaps=True)
+        return self._build(
+            document, [(SpanPiece(start, end), ()) for start, end in ranges], child_policy, tables
+        )
+
+    def _build(
+        self,
+        document: Document,
+        parents: Sequence[tuple[SpanPiece, tuple[str, ...]]],
+        child_policy: ChunkPolicy,
+        tables: Sequence[tuple[int, int, str]],
+        *,
+        section_options: SectionOptions | None = None,
+    ) -> ChunkResult:
+        ranges = tuple((piece.start, piece.end) for piece, _ in parents)
         fingerprint = self._chunker.configuration_fingerprint(child_policy, ranges)
+        if section_options is not None:
+            identity = [fingerprint, _SECTION_LAYOUT_VERSION, section_options.model_dump()]
+            fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         mapper = SourceMapper(document)
         warnings = list(_source_warnings(document))
         content_digest = hashlib.sha256(document.text.encode()).hexdigest()
         all_chunks: list[Chunk] = []
-        if child_policy.preserve_tables:
-            protected = [(e.start, e.end) for e in document.elements if e.kind == "table"]
-            if not protected:
-                protected = markdown_table_ranges(document.text)
-            protected_ends = tuple(right for _, right in protected)
-            for start, end in ranges:
-                for left, right in islice(protected, bisect_right(protected_ends, start), None):
-                    if left >= end:
+        table_ends = tuple(end for _, end, _ in tables)
+        # 在任何子块工作前锁定全局识别到的表格，避免子范围丢失 Markdown 围栏状态。
+        local_tables = []
+        for piece, _ in parents:
+            structures = []
+            if piece.table is not None:
+                structures.append(
+                    DocumentElement(
+                        id=piece.table.table_id,
+                        kind="table",
+                        start=0,
+                        end=piece.end - piece.start + len(piece.prefix),
+                    )
+                )
+            else:
+                for left, right, table_id in islice(
+                    tables, bisect_right(table_ends, piece.start), None
+                ):
+                    if left >= piece.end:
                         break
-                    if not (start <= left and right <= end):
+                    if not (piece.start <= left and right <= piece.end):
                         raise ValueError("parent range cuts through a preserved table")
+                    structures.append(
+                        DocumentElement(
+                            id=table_id,
+                            kind="table",
+                            start=left - piece.start,
+                            end=right - piece.start,
+                        )
+                    )
+            local_tables.append(tuple(structures))
         leaf_ordinal = 0
-        element_ends = tuple(element.end for element in document.elements)
-        for parent_ordinal, (start, end) in enumerate(ranges):
+        for parent_ordinal, ((piece, path), local_elements) in enumerate(
+            zip(parents, local_tables, strict=True)
+        ):
+            start, end = piece.start, piece.end
             parent = _chunk(
                 document,
                 start,
@@ -624,59 +691,58 @@ class ParentChildBuilder:
                 fingerprint,
                 content_digest,
                 kind="parent",
+                section_path=path,
                 mapper=mapper,
+                prefix=piece.prefix,
+                table=piece.table,
             )
             all_chunks.append(parent)
-            local_elements = []
-            for element in islice(document.elements, bisect_right(element_ends, start), None):
-                if element.start >= end:
-                    break
-                if (
-                    child_policy.preserve_tables
-                    and element.kind == "table"
-                    and not (start <= element.start and element.end <= end)
-                ):
-                    raise ValueError("parent range cuts through a preserved table")
-                if start <= element.start and element.end <= end:
-                    local_elements.append(
-                        element.model_copy(
-                            update={"start": element.start - start, "end": element.end - start}
-                        )
-                    )
             subdocument = Document(
                 id=document.id,
                 revision_id=document.revision_id,
-                text=document.text[start:end],
-                elements=tuple(local_elements),
+                text=piece.prefix + document.text[start:end],
+                elements=local_elements,
             )
-            children = self._chunker.chunk(subdocument, child_policy)
+            local_policy = (
+                child_policy
+                if local_elements
+                else child_policy.model_copy(update={"preserve_tables": False})
+            )
+            children = self._chunker.chunk(subdocument, local_policy)
             child_ids: dict[str, str] = {}
+            prefix_length = len(piece.prefix)
             for local_ordinal, child in enumerate(children.leaves):
+                table = child.table
+                if table is not None and piece.table is not None:
+                    # 临时表头只用于预算。真实表头位置及数据行序号沿用父片的全局信息。
+                    table = piece.table.model_copy(
+                        update={
+                            "row_start": piece.table.row_start + table.row_start,
+                            "row_end": piece.table.row_start + table.row_end,
+                            "oversized": table.oversized,
+                        }
+                    )
+                elif table is not None:
+                    table = table.model_copy(
+                        update={
+                            "header_start": start + table.header_start,
+                            "header_end": start + table.header_end,
+                        }
+                    )
                 all_chunks.append(
                     _chunk(
                         document,
-                        start + child.start,
-                        start + child.end,
+                        start + max(0, child.start - prefix_length),
+                        start + child.end - prefix_length,
                         leaf_ordinal,
                         fingerprint,
                         content_digest,
                         parent_id=parent.id,
                         ordinal_in_parent=local_ordinal,
+                        section_path=path,
                         mapper=mapper,
-                        prefix=child.context_prefix,
-                        table=None
-                        if child.table is None
-                        else child.table.model_copy(
-                            update={
-                                "table_id": (
-                                    f"markdown-table:{start + child.table.header_start}"
-                                    if child.table.table_id.startswith("markdown-table:")
-                                    else child.table.table_id
-                                ),
-                                "header_start": start + child.table.header_start,
-                                "header_end": start + child.table.header_end,
-                            }
-                        ),
+                        prefix=child.context_prefix or piece.prefix,
+                        table=table,
                     )
                 )
                 child_ids[child.id] = all_chunks[-1].id
@@ -702,6 +768,7 @@ class ParentChildBuilder:
         *,
         max_level: int = 6,
         include_preamble: bool = True,
+        max_parent_chars: int = DEFAULT_MAX_PARENT_CHARS,
     ) -> ChunkResult:
         """按原生 Docling 标题结构自动构建章节父子块。
 
@@ -710,31 +777,20 @@ class ParentChildBuilder:
             child_policy: 每个章节内部执行的子策略。
             max_level: 纳入分节边界的最大标题层级。
             include_preamble: 是否保留首个标题之前的序言。
+            max_parent_chars: 父块字符上限，包含重复表头，与子策略预算独立。
 
         Returns:
             章节父块及其子块；标题层级路径存于每块 section_path。
         """
+        options = SectionOptions(
+            max_level=max_level,
+            include_preamble=include_preamble,
+            max_parent_chars=max_parent_chars,
+        )
+        child_policy = _validated_policy(child_policy)
         sections = SectionBuilder().build(
-            document, max_level=max_level, include_preamble=include_preamble
+            document, max_level=options.max_level, include_preamble=options.include_preamble
         )
-        result = self.build(
-            document, [(section.start, section.end) for section in sections], child_policy
-        )
-        paths = {
-            parent.id: section.path
-            for parent, section in zip(result.parents, sections, strict=True)
-        }
-        return result.model_copy(
-            update={
-                "chunks": tuple(
-                    chunk.model_copy(
-                        update={
-                            "section_path": paths[
-                                chunk.id if chunk.kind == "parent" else str(chunk.parent_id)
-                            ]
-                        }
-                    )
-                    for chunk in result.chunks
-                )
-            }
-        )
+        tables = _table_ranges(document, child_policy.preserve_tables, include_markdown_gaps=True)
+        parents = _bounded_parents(document, sections, tables, options.max_parent_chars)
+        return self._build(document, parents, child_policy, tables, section_options=options)

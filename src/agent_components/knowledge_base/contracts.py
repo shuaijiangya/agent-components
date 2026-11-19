@@ -10,7 +10,7 @@ from agent_components.core.contracts import ChunkResult, Contract, Document
 class KnowledgeRevision(Contract):
     """保存一份规范文档及其完整分块产物。
 
-    文档版本同时标识这一份分块结果。重新分块时应在分块前分配新的版本 ID。
+    文档版本同时标识这一份分块结果。可用 Rechunker 从解析产物派生新的版本 ID。
     """
 
     document: Document

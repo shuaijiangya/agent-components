@@ -57,6 +57,7 @@ uv build
 | 解析 | `agent_components.parsing.DoclingParser.parse` | TXT；真实 Markdown/HTML/DOCX；元素映射；PDF 页范围分批入口，实际推理需离线模型 |
 | 分块 | `agent_components.chunking.Chunker.chunk` | 字符、递归、分隔符、Token、句子、语义；表格保持和 SourceMap |
 | 父子块 | `ParentChildBuilder.build` / `build_sections` | 显式范围或 Docling 章节；全局偏移、父内序号与标题路径 |
+| 重新分块 | `agent_components.chunking.Rechunker.rechunk` | 复用解析产物，派生可并存的新分块版本与追溯记录 |
 | 流式 | `StreamingChunker.iter_text` / `iter_file` | 磁盘快照、有界窗口、跨窗口表格与重叠、资源硬上限 |
 | 检索后处理 | `ContextExpander.expand` / `mmr_select` / `deduplicate` | 父块和邻块、上下文合并、MMR、文本近重复与可追溯结果 |
 | 模型 | `agent_components.models.ModelClient.generate` | 注册别名、任务规则、显式覆盖、逻辑调用日志 |

@@ -4,7 +4,9 @@
 """
 
 import hashlib
+import os
 from collections.abc import Iterable, Iterator
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, cast
 
@@ -14,11 +16,44 @@ from agent_components.core.contracts import (
     Document,
     DocumentElement,
     ParsedDocument,
+    ParseProvenance,
     SourceRef,
     SourceSpan,
 )
 from agent_components.core.errors import MissingDependencyError
 from agent_components.core.markdown_tables import markdown_table_ranges
+
+
+def _installed_version(distribution: str) -> str | None:
+    try:
+        return version(distribution)
+    except PackageNotFoundError:
+        return None
+
+
+type _SourceIdentity = tuple[int, int, int, int, int]
+
+
+def _source_identity(stat: os.stat_result) -> _SourceIdentity:
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+
+def _check_source(path: Path, identity: _SourceIdentity) -> None:
+    try:
+        current = _source_identity(path.stat())
+    except FileNotFoundError as exc:
+        raise ValueError("source changed during document parsing") from exc
+    if current != identity:
+        raise ValueError("source changed during document parsing")
+
+
+def _digest_source(path: Path) -> tuple[str, _SourceIdentity]:
+    """计算原文件摘要并记录身份，供转换前后检查源文件替换或改写。"""
+    with path.open("rb") as reader:
+        identity = _source_identity(os.fstat(reader.fileno()))
+        digest = hashlib.file_digest(reader, "sha256").hexdigest()
+        _check_source(path, identity)
+    return digest, identity
 
 
 class DoclingParser:
@@ -33,6 +68,7 @@ class DoclingParser:
         artifacts_path: Path | None = None,
         allow_model_downloads: bool = False,
         do_ocr: bool = False,
+        model_artifacts_id: str | None = None,
     ) -> None:
         """配置解析资源和 PDF 行为。
 
@@ -40,10 +76,12 @@ class DoclingParser:
             artifacts_path: PDF 所需离线模型目录。
             allow_model_downloads: 是否允许 PDF 未指定本地目录时由后端获取模型。
             do_ocr: 是否启用 PDF OCR；默认关闭。
+            model_artifacts_id: 可选的模型产物版本或清单摘要，用于 PDF 解析追溯。
         """
         self._artifacts = artifacts_path
         self._allow_downloads = allow_model_downloads
         self._do_ocr = do_ocr
+        self._model_artifacts_id = model_artifacts_id
 
     def parse(self, path: Path, *, document_id: str | None = None) -> ParsedDocument:
         """读取本地文件并构造规范文本。
@@ -56,7 +94,7 @@ class DoclingParser:
             Document、Markdown、原生 JSON；revision_id 为文件内容摘要。
 
         Raises:
-            ValueError: 不支持扩展名或离线 PDF 缺少现有模型目录。
+            ValueError: 不支持扩展名、离线 PDF 缺少模型目录或源文件发生变化。
             MissingDependencyError: 非 TXT 解析未安装 parsing extra。
             OSError: 文件读取失败。
 
@@ -64,12 +102,12 @@ class DoclingParser:
             来源按原生元素精度映射；存在目录不代表已验证全部 PDF 权重完整。
         """
         path = Path(path)
-        with path.open("rb") as reader:
-            digest = hashlib.file_digest(reader, "sha256").hexdigest()
+        digest, identity = _digest_source(path)
         document_id = document_id or digest
         if path.suffix.lower() == ".txt":
             with path.open(encoding="utf-8-sig", newline="") as reader:
                 text = reader.read()
+            _check_source(path, identity)
             return ParsedDocument(
                 document=Document(
                     id=document_id,
@@ -79,11 +117,44 @@ class DoclingParser:
                 ),
                 markdown=text,
                 native_json={"adapter": "plain_text", "text": text},
+                provenance=ParseProvenance(
+                    backend="plain_text",
+                    backend_version="1",
+                    source_sha256=digest,
+                    options={"encoding": "utf-8-sig", "preserve_newlines": True},
+                ),
             )
         converter = self._converter(path)
+        _check_source(path, identity)
         result = converter.convert(path, raises_on_error=True)
+        _check_source(path, identity)
         return self.from_native(
-            result.document, document_id=document_id, revision_id=digest, filename=path.name
+            result.document,
+            document_id=document_id,
+            revision_id=digest,
+            filename=path.name,
+            provenance=self._provenance(path, digest),
+        )
+
+    def _provenance(
+        self, path: Path, digest: str, *, page_range: tuple[int, int] | None = None
+    ) -> ParseProvenance:
+        suffix = path.suffix.lower()
+        options: dict[str, JsonValue] = {"format": suffix.removeprefix(".")}
+        if suffix == ".pdf":
+            options.update(
+                accelerator="cpu",
+                do_ocr=self._do_ocr,
+                allow_model_downloads=self._allow_downloads,
+                model_artifacts_id=self._model_artifacts_id,
+                model_source="local" if self._artifacts is not None else "backend_default",
+                page_range=None if page_range is None else list(page_range),
+            )
+        return ParseProvenance(
+            backend="docling",
+            backend_version=_installed_version("docling"),
+            source_sha256=digest,
+            options=options,
         )
 
     def _converter(self, path: Path) -> Any:
@@ -157,7 +228,7 @@ class DoclingParser:
             元素来源页码由 Docling 提供，不将跨批表格或章节自行拼接。
 
         Raises:
-            ValueError: 格式、批大小无效或离线资源未配置。
+            ValueError: 格式或批大小无效、离线资源未配置或源文件发生变化。
             MissingDependencyError: 未安装解析后端。
 
         Notes:
@@ -171,22 +242,25 @@ class DoclingParser:
             import pypdfium2
         except ImportError as exc:
             raise MissingDependencyError("parsing") from exc
-        with path.open("rb") as reader:
-            digest = hashlib.file_digest(reader, "sha256").hexdigest()
+        digest, identity = _digest_source(path)
         pdf = pypdfium2.PdfDocument(str(path))
         try:
             page_count = len(pdf)
         finally:
             pdf.close()
+        _check_source(path, identity)
         source_id = document_id or digest
         for first in range(1, page_count + 1, pages_per_batch):
             last = min(first + pages_per_batch - 1, page_count)
+            _check_source(path, identity)
             converted = converter.convert(path, raises_on_error=True, page_range=(first, last))
+            _check_source(path, identity)
             parsed = self.from_native(
                 converted.document,
                 document_id=f"{source_id}#pages={first}-{last}",
                 revision_id=digest,
                 filename=path.name,
+                provenance=self._provenance(path, digest, page_range=(first, last)),
             )
             # 分批产物不能共用全局 ordinal；独立分段 ID 防止索引和上下文版本混用。
             document = parsed.document.model_copy(
@@ -202,7 +276,13 @@ class DoclingParser:
             yield parsed.model_copy(update={"document": document})
 
     def from_native(
-        self, native: Any, *, document_id: str, revision_id: str, filename: str = ""
+        self,
+        native: Any,
+        *,
+        document_id: str,
+        revision_id: str,
+        filename: str = "",
+        provenance: ParseProvenance | None = None,
     ) -> ParsedDocument:
         """把原生 DoclingDocument 转换为可映射的规范 Markdown。
 
@@ -211,6 +291,7 @@ class DoclingParser:
             document_id: 调用方的文档身份。
             revision_id: 原文件或原生 JSON 的内容版本。
             filename: 可选的原文件名。
+            provenance: 上游已知解析记录，省略时仅记录原生序列化后端。
 
         Returns:
             具有结构元素和 SourceMap 的文档；映射精度明确为原生元素级。
@@ -315,4 +396,8 @@ class DoclingParser:
             markdown=text,
             native_json=cast(dict[str, JsonValue], native.export_to_dict()),
             source_mapping="mapped" if source_map else "text_only",
+            provenance=provenance
+            or ParseProvenance(
+                backend="docling-native", backend_version=_installed_version("docling-core")
+            ),
         )

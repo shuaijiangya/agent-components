@@ -16,6 +16,7 @@ FILES = (
     "src/agent_components/chunking/chunker.py",
     "src/agent_components/chunking/backends.py",
     "src/agent_components/chunking/sections.py",
+    "src/agent_components/chunking/rechunk.py",
     "src/agent_components/core/markdown_tables.py",
     "src/agent_components/chunking/tables.py",
     "src/agent_components/chunking/sources.py",
@@ -36,6 +37,7 @@ CONTRACTS = {
     "Issue",
     "ChunkResult",
     "ParsedDocument",
+    "ParseProvenance",
 }
 
 
@@ -49,7 +51,7 @@ def main() -> None:
         "由 `scripts/export_chunking_review.py` 从真实源码生成。中文注释与代码保持原样，"
         "每节标明路径、SHA-256 和原文件行号。核心契约只节选分块相关类，其余模块完整展示；"
         "节选块不是独立可执行文件，运行请使用源码包。\n\n",
-        "功能与参数见 [CHUNKING.md](../CHUNKING.md)，45 项行为对应见 "
+        "功能与参数见 [CHUNKING.md](../CHUNKING.md)，行为、代码与测试的对应关系见 "
         "[CHUNKING_REVIEW.md](../reviews/CHUNKING_REVIEW.md)。\n\n",
         "| 文件 | SHA-256 |\n| --- | --- |\n",
     ]

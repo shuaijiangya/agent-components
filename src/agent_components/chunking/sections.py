@@ -3,7 +3,27 @@
 不通过 Markdown 的井号或文本相似度推测标题，保留完整层级路径。
 """
 
+from bisect import bisect_right
+from collections.abc import Iterator, Sequence
+
+from pydantic import Field
+
+from agent_components.chunking.tables import SpanPiece, split_table
 from agent_components.core.contracts import Contract, Document
+
+DEFAULT_MAX_PARENT_CHARS = 4000
+_SECTION_LAYOUT_VERSION = "bounded-sections-v1"
+
+
+class SectionOptions(Contract):
+    """配置章节识别和自动父块的字符预算。
+
+    max_parent_chars 包含表格的重复表头，与子块字符或 Token 预算独立。
+    """
+
+    max_level: int = Field(default=6, ge=1, strict=True)
+    include_preamble: bool = True
+    max_parent_chars: int = Field(default=DEFAULT_MAX_PARENT_CHARS, ge=1, strict=True)
 
 
 class Section(Contract):
@@ -74,3 +94,65 @@ class SectionBuilder:
                 )
             )
         return tuple(sections)
+
+
+def _body_pieces(text: str, start: int, end: int, limit: int) -> Iterator[SpanPiece]:
+    """在窗口后半段优先使用段落、行或句末边界，否则按字符上限切开。"""
+    while start < end:
+        stop = min(start + limit, end)
+        if stop < end:
+            floor = start + limit // 2
+            for delimiters in (("\n\n",), ("\n",), ("。", "！", "？", ". ", "! ", "? ")):
+                candidates = [(text.rfind(d, floor, stop), len(d)) for d in delimiters]
+                boundary = max((pos + size for pos, size in candidates if pos >= 0), default=0)
+                if boundary:
+                    stop = boundary
+                    break
+        yield SpanPiece(start, stop)
+        start = stop
+
+
+def _bounded_parents(
+    document: Document,
+    sections: Sequence[Section],
+    tables: Sequence[tuple[int, int, str]],
+    limit: int,
+) -> tuple[tuple[SpanPiece, tuple[str, ...]], ...]:
+    """为章节父块生成有界范围，长表格按完整行分片。
+
+    章节路径沿用原标题。表格父片的正文取原文，后续片另携带重复表头。
+    若一行加表头仍超过父预算，抛出错误，避免悄悄产生超预算的父块。
+    """
+    result = []
+    table_ends = tuple(end for _, end, _ in tables)
+    for section in sections:
+        section_tables = []
+        for index in range(bisect_right(table_ends, section.start), len(tables)):
+            start, end, table_id = tables[index]
+            if start >= section.end:
+                break
+            if not section.start <= start < end <= section.end:
+                raise ValueError("section boundary cuts through a preserved table")
+            section_tables.append((start, end, table_id))
+        if section.end - section.start <= limit:
+            result.append((SpanPiece(section.start, section.end), section.path))
+            continue
+        position = section.start
+        for start, end, table_id in section_tables:
+            result.extend(
+                (p, section.path) for p in _body_pieces(document.text, position, start, limit)
+            )
+            try:
+                parts = split_table(
+                    document.text, start, end, table_id, size=limit, measure=len, overflow="error"
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "preserved table row or indivisible table exceeds max_parent_chars"
+                ) from exc
+            result.extend((p, section.path) for p in parts)
+            position = end
+        result.extend(
+            (p, section.path) for p in _body_pieces(document.text, position, section.end, limit)
+        )
+    return tuple(result)

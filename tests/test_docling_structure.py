@@ -3,7 +3,7 @@ import pytest
 pytest.importorskip("docling_core")
 from docling_core.types.doc import DocItemLabel, DoclingDocument
 
-from agent_components.chunking import Chunker, ChunkPolicy, ParentChildBuilder
+from agent_components.chunking import Chunker, ChunkPolicy, ParentChildBuilder, Rechunker
 from agent_components.parsing import DoclingParser
 
 
@@ -38,6 +38,13 @@ def test_native_docling_repeated_text_heading_levels_and_page_provenance():
     )
     assert len(sections.parents) == 3
     assert any(c.section_path == ("合同", "第1节") for c in sections.parents)
+    rechunked = Rechunker().rechunk(parsed, ChunkPolicy(strategy="character", size=4))
+    selected = next(
+        leaf for leaf in rechunked.chunks.leaves if any(r.page == 2 for r in leaf.source_refs)
+    )
+    canonical, native_ref = selected.source_refs
+    assert canonical.revision_id == rechunked.document.revision_id
+    assert native_ref.revision_id == "r1" and native_ref.page == 2
 
 
 @pytest.mark.integration
@@ -125,7 +132,7 @@ def test_pdf_batch_ranges_use_real_pdf_page_count_and_keep_distinct_segment_ids(
             native.add_heading(text=f"页 {page_range}", level=1)
             return SimpleNamespace(document=native)
 
-    parser = DoclingParser()
+    parser = DoclingParser(do_ocr=True, model_artifacts_id="cpu-ocr-2026-11")
     monkeypatch.setattr(parser, "_converter", lambda path: Converter())
     results = list(parser.iter_pdf(path, document_id="original", pages_per_batch=2))
     assert calls == [(1, 2), (3, 4), (5, 5)]
@@ -133,3 +140,39 @@ def test_pdf_batch_ranges_use_real_pdf_page_count_and_keep_distinct_segment_ids(
     assert all(r.document.metadata["source_document_id"] == "original" for r in results)
     assert results[-1].document.metadata["page_start"] == 5
     assert len({r.document.revision_id for r in results}) == 1
+    assert [r.provenance.options["page_range"] for r in results] == [[1, 2], [3, 4], [5, 5]]
+    assert all(r.provenance.source_sha256 == r.document.revision_id for r in results)
+    assert all(r.provenance.options["do_ocr"] is True for r in results)
+    assert all(r.provenance.options["model_artifacts_id"] == "cpu-ocr-2026-11" for r in results)
+
+
+@pytest.mark.integration
+def test_pdf_batch_does_not_attribute_replaced_file_to_original_digest(tmp_path, monkeypatch):
+    from contextlib import closing
+    from types import SimpleNamespace
+
+    pdfium = pytest.importorskip("pypdfium2")
+    original = tmp_path / "contract.pdf"
+    replacement = tmp_path / "replacement.pdf"
+    for path, size in ((original, 100), (replacement, 200)):
+        pdf = pdfium.PdfDocument.new()
+        try:
+            for _ in range(2):
+                pdf.new_page(size, size).close()
+            pdf.save(str(path))
+        finally:
+            pdf.close()
+
+    class Converter:
+        def convert(self, path, *, page_range, raises_on_error):
+            native = DoclingDocument(name="contract")
+            native.add_heading(text=f"合同第{page_range[0]}页", level=1)
+            return SimpleNamespace(document=native)
+
+    parser = DoclingParser()
+    monkeypatch.setattr(parser, "_converter", lambda path: Converter())
+    with closing(parser.iter_pdf(original, pages_per_batch=1)) as pages:
+        assert next(pages).provenance.options["page_range"] == [1, 1]
+        replacement.replace(original)
+        with pytest.raises(ValueError, match="source changed"):
+            next(pages)

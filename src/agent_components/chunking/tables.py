@@ -71,8 +71,6 @@ def split_table(
         ]
     header_end = start + sum(map(len, lines[:header_lines]))
     header = text[start:header_end]
-    # 原文末尾表头无换行时，也要保证重复前缀与数据行分隔；不改变原文正文。
-    prefix = header if header.endswith(("\n", "\r")) else header + "\n"
     positions = [header_end]
     for line in lines[header_lines:]:
         positions.append(positions[-1] + len(line))
@@ -80,7 +78,8 @@ def split_table(
     row = 0
     while row < len(positions) - 1 or (row == 0 and not pieces):
         left = start if not pieces else positions[row]
-        extra = "" if not pieces else prefix
+        # 有后续行时表头已经含原文行终止符，包括 U+2028 等 Unicode 分隔符。
+        extra = "" if not pieces else header
         stop = row
         while (
             stop < len(positions) - 1

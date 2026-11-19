@@ -53,6 +53,10 @@
 | CH-43 | 流式字符重叠在分析窗口接缝仍保持 | streaming.StreamingChunker.iter_text | test_character_overlap_is_preserved_at_streaming_window_seams | 通过 |
 | CH-44 | PDF 页范围覆盖所有页且分段身份不混用 | parsing.DoclingParser.iter_pdf | test_pdf_batch_ranges_use_real_pdf_page_count_and_keep_distinct_segment_ids | 调度检查通过，非权重推理验收 |
 | CH-45 | 约 71 MB UTF-8 大文本完整覆盖，有界 Python 内存；八线程 16 请求一致 | scripts/benchmark_chunking.py | consume／main，原始记录 docs/benchmarks/chunking-local.json | 本地实际执行通过 |
+| CH-46 | 长章节和无标题正文按独立父预算切分，可用于父块替换检索 | ParentChildBuilder.build_sections | test_bounded_section_parents_fit_retrieval_budget | 回归通过 |
+| CH-47 | 长表格跨父块保留真实表头偏移、行号及原文坐标，拒绝无法容纳的行 | sections._bounded_parents／ParentChildBuilder._build | test_long_table_spans_parent_ranges_without_changing_row_or_header_offsets；test_explicit_parents_keep_markdown_table_outside_native_table；test_unicode_table_newlines_do_not_create_phantom_rows_in_continuation_parents | 回归通过 |
+| CH-48 | 复用旧解析产物生成可并存的分块版本，保存隔离的解析与分块记录 | Rechunker.rechunk | test_rechunk_versions_can_coexist_and_retain_parser_artifact_trace；test_legacy_parsed_artifact_supports_rechunk_without_assuming_parser_options；test_rechunk_cli_honors_parent_budget_without_original_file；test_rechunk_result_keeps_isolated_parse_configuration_and_business_metadata | SQLite 与 CLI 实跑通过 |
+| CH-49 | PDF 批次之间更换源文件时停止，避免把新文件标注为旧摘要 | DoclingParser.iter_pdf | test_pdf_batch_does_not_attribute_replaced_file_to_original_digest | 分页调度回归通过 |
 
 ## 测试文件定位
 

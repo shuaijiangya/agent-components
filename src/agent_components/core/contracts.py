@@ -257,6 +257,18 @@ class ChunkResult(Contract):
         return tuple(item for item in self.chunks if item.kind == "leaf")
 
 
+class ParseProvenance(Contract):
+    """记录解析产物的来源摘要、后端和已知解析配置。
+
+    外部原生对象或历史产物可能缺少配置和源文件摘要，缺失值表示未知。
+    """
+
+    backend: str = Field(min_length=1)
+    backend_version: str | None = None
+    source_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    options: dict[str, JsonValue] | None = None
+
+
 class ParsedDocument(Contract):
     """记录规范文本、Markdown 和后端原生结构。
 
@@ -267,6 +279,7 @@ class ParsedDocument(Contract):
     markdown: str
     native_json: dict[str, JsonValue]
     source_mapping: Literal["text_only", "mapped"] = "text_only"
+    provenance: ParseProvenance | None = None
 
 
 class Message(Contract):

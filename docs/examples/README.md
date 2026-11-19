@@ -16,7 +16,7 @@ uv run --no-sync python -m examples.documents --help
 | 组件 | 可运行入口 | 依赖组 | 文档 |
 | --- | --- | --- | --- |
 | 文档解析／标准 PDF／原生无模型 PDF | `examples.documents parse / native-pdf` | TXT 核心；其他格式 `parsing` | [解析与离线 PDF](parsing.md) |
-| 六种分块／父子块／流式 | `examples.documents chunk / parents / stream` | 字符、分隔符核心；其余见分块文档 | [分块接入](chunking.md) |
+| 六种分块／父子块／流式／重新分块 | `examples.documents chunk / parents / stream / rechunk` | 字符、分隔符核心；其余见分块文档 | [分块接入](chunking.md) |
 | 父块与邻块扩展／MMR／去重 | `examples.retrieval context / select` | 核心 | [检索组件](retrieval.md) |
 | 向量索引与查询 | `examples.retrieval index / search` | `retrieval` | [检索组件](retrieval.md) |
 | 知识库内容与存储切换 | `KnowledgeBase`、`StorageRouter` | SQLite 为核心；LanceDB 需 `retrieval` | [知识库与存储适配器](knowledge-base.md) |
