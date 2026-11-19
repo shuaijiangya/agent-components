@@ -1,102 +1,65 @@
-# 知识库内容与可替换存储
+# 轻量知识库开发接入
 
-| 包 | 公共接口 | 默认实现 |
+使用 `ManagedKnowledgeBase` 保存文件和分块、执行独立索引任务、发布版本和查询。SQLite、文件目录和 LanceDB 均在应用进程内使用。解析与分块仍可独立调用。[设计选型](../design-summary.md#4-轻量知识库与检索组件)
+
+| 接口 | 持久化内容 | 默认实现 |
 | --- | --- | --- |
-| `agent_components.knowledge_base` | `KnowledgeBase` 通过 `KnowledgeRepository` 保存文档、分块和发布指针 | [SQLite 内容适配器](../../src/agent_components/knowledge_base/adapters/sqlite.py) |
-| `agent_components.retrieval` | `RetrievalPipeline` 通过 `VectorStore` 召回已授权的叶子块 | [LanceDB 向量适配器](../../src/agent_components/retrieval/adapters/lancedb.py) |
-| `agent_components.storage.backends` | `StorageRouter` 通过 `StorageBinding` 选择当前请求使用的两个实例 | [存储路由](../../src/agent_components/storage/backends.py) |
+| `LifecycleRepository` | 知识库配置、文档与分块版本、文件引用、发布指针、索引任务、删除标记 | [SQLiteKnowledgeRepository](../../src/agent_components/knowledge_base/adapters/sqlite.py) |
+| `ArtifactStore` | 源文件、完整 ParsedDocument JSON（含 Docling 原生结构）、Markdown | [LocalArtifactStore](../../src/agent_components/knowledge_base/adapters/files.py) |
+| `ManagedVectorStore`、`KeywordStore` | 叶子块的向量和全文文本，以及用于校验的文档和版本标识 | [LanceDBVectorStore](../../src/agent_components/retrieval/adapters/lancedb.py) |
+| `EmbeddingProvider`、`RerankerProvider` | 调用方配置的模型能力 | [Embedding 工厂](../../examples/providers.py) · [HTTPReranker](retrieval.md#重排序与分数) |
 
-SQLite 内容库使用 Python 标准库 `sqlite3`，保存规范 `Document` 和完整 `ChunkResult`，包括父子、表格和来源信息。每个文档版本保存为一个快照，发布指针与版本数据由 SQLite 事务保护。现有 `SQLiteStateStore` 用于应用状态，其表和 API 独立。
+## 创建、入库、发布和查询
 
-去重、MMR 和上下文扩展分别位于 `retrieval/selection.py` 和 `retrieval/context.py`。旧的 `agent_components.selection`、`agent_components.context` 和 `agent_components.retrieval.LanceDBIndex` 仍可导入。
+从知识库包 README 执行创建目录、保存解析草稿、预览分块、索引和首次发布。检索包 README 提供关键词查询和混合重排示例。[知识库首次发布](../../src/agent_components/knowledge_base/README.md#创建知识库并首次发布) · [检索包 README](../../src/agent_components/retrieval/README.md)
 
-## 入库、发布和查询
 
-以下示例在仓库根目录执行。使用 `uv sync --locked --extra parsing --extra retrieval --extra agent`，并设置 `EMBEDDING_BASE_URL`、`EMBEDDING_MODEL`、`EMBEDDING_DIMENSION`、`EMBEDDING_API_KEY`。用从未发布过该文档的数据目录运行一次。[Embedding 工厂](../../examples/providers.py)
+示例授权函数只为这一个测试文档返回授权。线上每次调用从权限服务读取当前访问范围。组件在召回前限定已发布叶子，再在返回前读取一次权限与发布状态。范围或版本变化时抛 `RevisionConflictError`。可选 `allowed_chunk` 需要对整个块正文与重复表头作出授权判断。任意子块不可见时，托管入口会隐藏父块，仍可返回获准的叶子和邻块。审阅草稿、读取文件和更改发布指针属于管理操作，应用在调用各入口前鉴权。[检索结果与预算](retrieval.md)
+
+## 更新、重试与删除
+
+- 用相同业务文档 ID 提交更新后的文件，`save_parsed` 保存新版本，原文件 SHA-256 必须和解析记录匹配。相同解析产物和分块配置重复提交得到同一草稿版本。用 `list_documents` 查当前发布版本，用 `list_revisions`、`get_revision` 和 `chunk_page` 查历史。
+- 只改分块时调用 `kb.rechunk_revision(document_id, revision_id, new_policy)`。调用会从仓储读取解析产物与源文件校验摘要，沿用原解析结果。新版本的 `trace.previous_revision_id` 记录分支来源。
+- 工作者领取并执行 `run_index(job_id)`，任务状态为 `queued`、`running`、`succeeded` 或 `failed`。重复 `enqueue_index` 返回稳定任务 ID。失败任务可直接重试，已成功的执行直接返回当前任务。`list_index_jobs(status="queued")` 可按状态分页发现任务。若进程在运行中退出，管理员用 `reset_index(job_id, expected_attempt=…)` 重排，尝试编号会拒绝旧工作者写入。
+- 新版本索引成功且叶子行全部核验通过后，才可以 `publish_revision(..., expected_revision=旧版本)`。失败或比较版本冲突时，已有发布指针继续生效。显式重建当前已发布版本前，先 `unpublish_document`，或准备新的版本和独立索引后切换。
+- `delete_document(document_id, expected_revision=…)` 原子撤下发布并保留删除标记。`purge_deleted(document_id)` 清理该文档各版本的索引记录和无人引用的文件。可以重复调用，同一仓储中的其他引用继续有效。用 `collect_orphan_artifacts()` 清理中断上传产生的无引用文件。已经生成的备份和 LanceDB 历史版本按部署保留策略管理。
+- 用 `create_catalog`、`get_catalog`、`list_catalogs`、`update_catalog` 和 `delete_catalog` 管理目录。更新名称和删除目录使用 `expected_version`。绑定创建后固定，清理目录的文档和待删除文件后才可删除目录。
+
+## 备份与恢复
+
+`kb.backup_workspace(Path("backup/contracts-20261119.zip"))` 备份该 SQLite 工作区的所有知识库和其引用的文件，要求新的归档路径。SQLite 文件可以由多个知识库共享，产物目录归这个工作区独占。可迁移到挂载支持硬链接的持久目录。同一环境中移动数据时使用备份恢复到新路径和独立产物目录。[备份实现](../../src/agent_components/knowledge_base/backup.py)
 
 ```python
-from contextlib import closing
 from pathlib import Path
 
-from agent_components.chunking import ChunkPolicy, ParentChildBuilder
-from agent_components.knowledge_base import KnowledgeBase
-from agent_components.knowledge_base.adapters.sqlite import SQLiteKnowledgeRepository
-from agent_components.parsing import DoclingParser
-from agent_components.retrieval import IndexRecord, RetrievalOptions, RetrievalPipeline
-from agent_components.retrieval.adapters.lancedb import LanceDBVectorStore
+from agent_components.knowledge_base import restore_workspace
+from agent_components.knowledge_base.adapters.files import LocalArtifactStore
+
+plan = restore_workspace(
+    Path("backup/contracts-20261119.zip"),
+    Path("recovered/content.db"),
+    LocalArtifactStore(Path("recovered/artifacts")),
+)
+for entry in plan:
+    print(entry.knowledge_base_id, entry.document_id, entry.revision_id)
+```
+
+恢复先校验数据库、归档和文件摘要，再安装到新路径。备份覆盖内容和产物，LanceDB 向量和全文索引由恢复后的内容重建。返回的清单列出备份时已发布的托管版本。对恢复后的每个知识库绑定新索引，按清单分别执行 `enqueue_index`、`run_index`、`publish_revision(..., expected_revision=None)` 后开放查询。对旧版 `KnowledgeBase` 命名空间按应用原有流程恢复其索引并发布。
+
+## 换存储适配器
+
+按运行时配置注册两个端口实例，每个请求解析同一份 `StorageBinding`。例如把内容指向 `content-green`，把索引指向 `contracts-green`。切换前核对目标库版本、产物和索引齐备，已有请求继续持有原实例。知识库与检索可单独使用，沿用原有 `KnowledgeBase` 的应用负责自己的索引和发布协议。[StorageRouter](../../src/agent_components/storage/backends.py)
+
+```python
 from agent_components.storage.backends import StorageBinding, StorageRouter
-from examples.providers import compatible_embeddings
 
-with closing(compatible_embeddings()) as embedding:
-    content = SQLiteKnowledgeRepository(Path("data/knowledge/content.db"))
-    vector_index = LanceDBVectorStore(
-        Path("data/knowledge/vectors"),
-        dimensions=embedding.dimension,
-        table_name="contract_terms",
-    )
-    router = StorageRouter(
-        documents={"content-blue": content}, vectors={"contract-blue": vector_index}
-    )
-    binding = StorageBinding(documents="content-blue", vectors="contract-blue")
-    stores = router.resolve(binding)
-    knowledge = KnowledgeBase("contracts", stores.documents)
-
-    document = (
-        DoclingParser()
-        .parse(
-            Path("examples/data/contract.md"),
-            document_id="DEMO-2026-001",
-        )
-        .document
-    )
-    chunks = ParentChildBuilder().build_sections(
-        document,
-        ChunkPolicy(strategy="character", size=160),
-        max_level=2,
-    )
-    knowledge.save_revision(document, chunks)
-
-    # 只向量化叶子块。向量成功写入后，才更新该文档的发布指针。
-    vectors = embedding.embed_batch([chunk.index_text for chunk in chunks.leaves])
-    stores.vectors.upsert(
-        [
-            IndexRecord(
-                id=chunk.id,
-                document_id=chunk.document_id,
-                revision_id=chunk.revision_id,
-                text=chunk.index_text,
-                vector=tuple(vector),
-            )
-            for chunk, vector in zip(chunks.leaves, vectors, strict=True)
-        ]
-    )
-    knowledge.publish_revision(document.id, document.revision_id, expected_revision=None)
-
-    # 示例文档即授权范围。生产从业务权限服务取得本次请求允许访问的文档 ID。
-    visible = knowledge.published_chunks(document_ids=[document.id])
-    result = RetrievalPipeline(stores.vectors, embedding).search(
-        "验收通过后什么时候支付尾款？",
-        visible_chunks=visible,
-        options=RetrievalOptions(selection="mmr", parent_mode="replace"),
-    )
-    for window in result.context.windows:
-        print(window.document_id, window.revision_id, window.index_text)
+router = StorageRouter(
+    documents={"content-green": content},
+    vectors={"contracts-green": index},
+)
+stores = router.resolve(StorageBinding(documents="content-green", vectors="contracts-green"))
 ```
 
-草稿提交后可通过 `get_revision()` 读取。SQLite 在写入前验证快照能完整读回，包含 `NaN` 或无穷大的快照会被拒绝。重复写入同一版本的相同快照幂等。改用新分块策略时可用 `Rechunker` 从已保存的解析产物派生 `revision_id` 及追溯记录。首次发布时 `expected_revision=None`，更新或取消发布时传预期的当前版本。并发更新不匹配会抛 `RevisionConflictError`。[重新分块示例](chunking.md#复用解析产物生成新版本)
-
-向量写入失败时，已发布版本保持可见。重新写入新版本的向量后，可以再次发布。`unpublish_document()` 撤下发布指针，后续读取发布快照时不包含该文档。旧内容和向量可由调用方按保留策略清理。已取得发布快照的请求继续使用自己的快照。授权文档范围用列表或元组传入，例如 `document_ids=["contract-001"]`。
-
-## 运行时选择和更换后端
-
-启动时将已配置实例注册为 `content-blue`、`content-green`、`contract-blue`、`contract-green` 等名称。可将绑定配置存入应用配置中心，两项可独立更换。
-
-```json
-{"documents":"content-green","vectors":"contract-blue"}
-```
-
-每次请求先加载这份 JSON，再调用 `StorageBinding.model_validate_json()` 和 `StorageRouter.resolve()`。同一请求使用解析得到的 `stores.documents`、`stores.vectors` 完成操作。未注册的配置会报错，已有请求继续使用原实例。LanceDB 适配器会在读取时检查其他实例已提交的索引版本。
-
-- 接入 PostgreSQL 等内容库，实现 `KnowledgeRepository`，确保保存幂等、发布版本条件的原子性和发布快照的一致性。[内容端口](../../src/agent_components/knowledge_base/repository.py)
-- 接入其他向量库，实现 `VectorStore`。召回前先按可见块 ID 过滤，再按相似度或距离取 Top K。MMR 请求候选向量时，从相同索引记录读取。[向量端口](../../src/agent_components/retrieval/vector_store.py)
-- 同一向量集合要求块 ID 在整个集合中唯一，且使用同一向量模型、版本和预处理。外部分块的 ID 只在各知识库内唯一时，为每个知识库绑定独立向量表。切换前先准备目标内容与索引，核对已发布版本、分块 ID 和向量模型版本。`StorageRouter` 根据应用配置选择实例，数据迁移和重建索引由部署流程执行。
+- 换内容库实现 `LifecycleRepository`，保留不可变快照、同事务发布比对和尝试编号。换向量库实现 `ManagedVectorStore`，按可见 ID 先过滤后取 Top K，并支持按块读取及清理。保持索引的 Embedding 指纹一致。
+- 默认 LanceDB 将向量和全文文本写入同一记录。主动注入独立 `keyword_index` 时，由它所在的部署写入、验证和清理其副本。
+- SQLite 事务内完成发布验证和短时索引写入，Embedding 请求在写事务外发出。批量索引任务按文档暂存向量，检索按授权文档读取当前快照。按实际文档和并发规模验证内存、数据库写锁等待与检索延迟。

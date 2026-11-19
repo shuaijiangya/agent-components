@@ -1,10 +1,10 @@
-# 检索原语、上下文扩展与选择
+# 检索接入、重排与上下文扩展
 
-文本检索入口和存储端口位于 `agent_components.retrieval`。`RetrievalPipeline` 通过 `VectorStore` 接受不同的向量存储适配器。现有命令仍可单独运行各检索原语。[向量端口](../../src/agent_components/retrieval/vector_store.py) · [LanceDB 适配器](../../src/agent_components/retrieval/adapters/lancedb.py) · [命令行源码](../../examples/retrieval.py)
+文本检索入口和存储端口位于 `agent_components.retrieval`。`RetrievalPipeline` 可独立使用，或通过 `ManagedKnowledgeBase.search` 读取发布范围并在返回前复核实时授权。使用仓库中的合同运行查询，可直接从包 README 开始。[检索包 README](../../src/agent_components/retrieval/README.md) · [存储端口](../../src/agent_components/retrieval/vector_store.py) · [知识库接入](knowledge-base.md)
 
 ## 从查询文本检索上下文
 
-`RetrievalPipeline.search()` 接受查询字符串和当前请求可见的 `Chunk` 集合。它调用使用方注入的 `EmbeddingProvider`，召回叶子块，按选定策略处理候选，再补充父块或邻块。[链路源码](../../src/agent_components/retrieval/pipeline.py)
+`RetrievalPipeline.search()` 接受查询字符串和当前请求可见的 `Chunk` 集合。它先按允许的叶子 ID 召回，再融合、重排、选择候选并扩展上下文。[链路源码](../../src/agent_components/retrieval/pipeline.py)
 
 先准备同一批已入库的叶子块及其向量。`IndexRecord.id`、`document_id`、`revision_id` 与 `Chunk` 对应，索引文本使用 `chunk.index_text`。查询与入库共享 Embedding 模型、版本、维度和预处理。下面的例子使用现有 OpenAI 兼容工厂，请先设置 `EMBEDDING_BASE_URL`、`EMBEDDING_MODEL`、`EMBEDDING_DIMENSION` 和 `EMBEDDING_API_KEY`，并安装 `retrieval` 和 `agent` 依赖组。[工厂实现](../../examples/providers.py)
 
@@ -26,7 +26,8 @@ with closing(compatible_embeddings()) as embedding:
         "设备验收不通过时，尾款应在什么时候支付？",
         visible_chunks=visible,
         options=RetrievalOptions(
-            selection="mmr",
+            mode="hybrid",
+            selection="exact",
             recall_limit=30,
             top_k=5,
             parent_mode="none",
@@ -41,15 +42,40 @@ for window in result.context.windows:
     print(window.index_text)
 ```
 
-- `recall_limit` 控制选择前的召回量。`top_k` 控制选择后的叶子数，不计补充的上下文块。
-- `selection="dedup"` 默认使用文本去重。`selection="mmr"` 读取索引行里的候选向量，只对查询文本执行一次向量化。
+- `mode="vector"` 调用 Embedding 召回；`mode="keyword"` 以 LanceDB ICU 中文分词执行 BM25；`mode="hybrid"` 用 LanceDB RRF 融合两个列表。仅关键词召回且采用去重时，`RetrievalPipeline(index)` 便可运行。
+- `recall_limit` 是每个通道的候选数上限。`top_k` 是选择后的叶子数，不计补充的父块或邻块。`rrf_k` 默认为 60，融合分数按通道的名次计算。
+- `selection="exact"` 去除同一文档版本的相同区间及规范化后文本相同的候选。`selection="dedup"` 是默认值，并额外使用字符片段 Jaccard 判断近重复。`selection="mmr"` 使用已有候选向量衡量冗余。
 - `parent_mode="none"` 使用邻块配置。`append` 额外纳入父块，`replace` 以父块替换有父关系的命中。后两种要求相关父块在可见集合中。
-- `result.matches` 按选择后的顺序返回索引命中，`score` 保留 LanceDB 距离。`result.dropped` 记录文本去重的依据。`result.context` 返回窗口、纳入块 ID 和因字符预算省略的块 ID。
 - 可见叶子 ID 在 Top K 前过滤。空作用域直接返回空结果。索引行的版本、文档或文本与可见块不一致时，调用会报错。
 
 `visible_chunks` 是当前请求的授权语料快照。此入口在内存中持有该快照，并将可见叶子 ID 传给 LanceDB 过滤。查询为同步调用。业务服务可在自己的线程池调度，并管理 Provider 超时与生命周期。
 
-使用知识库内容组件时，可以通过 `KnowledgeBase.published_chunks(document_ids=...)` 取得这份快照，再传给检索入口。[知识库与存储切换](knowledge-base.md)
+## 重排序与分数
+
+`HTTPReranker` 接受完整端点 `endpoint_url`、服务端模型 ID、可选令牌环境变量和以秒为单位的超时。适配 Cohere 兼容的 `model/query/documents` 请求及 `results[index,relevance_score]` 响应。为已授权的候选提交检索文本，使用有权处理这些文档的端点。[Provider 源码](../../src/agent_components/retrieval/reranking.py)
+
+```python
+from agent_components.retrieval import HTTPReranker, RetrievalOptions, RetrievalPipeline
+
+provider = HTTPReranker(
+    endpoint_url="https://rerank.example.com/v1/rerank",
+    model="your-rerank-model",
+    api_key_env="RERANK_API_KEY",
+    timeout=5,
+)
+pipeline = RetrievalPipeline(index, embedding, reranker=provider)
+result = pipeline.search(
+    "设备验收条件",
+    visible_chunks=visible,
+    options=RetrievalOptions(mode="hybrid", rerank=True, reranker_failure="fallback"),
+)
+for hit in result.hits:
+    print(hit.match.id, hit.match.revision_id, hit.scores, hit.source_refs)
+```
+
+- `reranker_failure="raise"` 为默认策略，超时、传输失败、HTTP 错误和无效结果抛 `RerankerError`。选 `"fallback"` 时沿用前一阶段的顺序，结果附带 `reranker_fallback` 提示。
+- `result.hits` 记录向量原始分数及类型、向量和 BM25 名次、BM25、RRF、重排分数与来源。缺失阶段使用 `None`。距离越小越近；BM25 和 RRF 越大越相关。`matches` 保留索引原始分值，适合兼容已有代码。
+- `result.dropped` 记录被去重的块、保留块和原因。`result.context` 返回上下文窗口、来源、纳入块 ID 与超过预算的块 ID。上下文合并重叠正文和同来源锚点的重复区间，保留不同页、元素及定位精度。
 
 ## 嵌入式 LanceDB
 
@@ -67,7 +93,7 @@ uv run --no-sync python -m examples.retrieval search --db data/lancedb --dimensi
 - `--dimensions` 必须与既有表和所有向量匹配，升级模型应使用新表／新目录。
 - 返回 `score_kind="distance"`，越小越近；不能作为越大越好的 BM25 分值直接相加。
 - `--document-ids path.json` 读取允许的文档 ID 数组；空数组返回空结果。过滤只是查询条件，不能代替权威权限与版本检查。
-- `index --build-fts` 仅建立后端全文索引；当前未提供中文分词、BM25 查询或混合融合接口。
+- `index --build-fts` 提前建立 ICU 全文索引。首次关键词查询也可按需建立。中文领域词和业务编号的排序阈值用实际问答样本验收。
 
 ## 父块与相邻块扩展
 
@@ -107,6 +133,6 @@ uv run --no-sync python -m examples.retrieval select examples/data/candidates-fi
 uv run --no-sync python -m examples.retrieval select examples/data/candidates-fixture.json --method dedup --threshold 0.85 --output data/unique.json
 ```
 
-MMR 使用查询余弦相关性与已选候选最大余弦冗余进行贪心选择，不直接混用未归一化的 BM25 分数。去重使用规范化文本的精确比较／字符 shingle Jaccard，并返回 `dropped` 的保留对象和相似度依据；它不能判断语义事实是否相同。
+纯向量模式的 MMR 使用查询余弦相关性。关键词、融合或已重排模式按上游顺序缩放相关度，再与已选候选的最大余弦相似度做权衡。精确去重与近重复比较各自返回保留对象和相似度依据。
 
-当前候选池默认最多 2000，避免不受控的比较成本。`RetrievalPipeline` 先进行候选选择再补上下文。单独使用原语时，调用方可以按业务调整组合顺序。
+独立候选选择原语默认上限 2000。检索入口按 `recall_limit` 为每个通道限制工作量，默认每通道 30。单独使用原语时，调用方可以按业务调整组合顺序。

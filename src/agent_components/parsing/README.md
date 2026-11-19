@@ -20,6 +20,8 @@
 
 `ParsedDocument.provenance` 记录解析后端及版本、源文件 SHA-256 和已知配置。标准 PDF 记录 CPU、OCR、页范围和模型来源，可用 `DoclingParser(model_artifacts_id="...")` 关联已核对的权重清单版本。解析期间检测到源文件改写或替换时会报错，避免沿用旧摘要。外部对象可向 `from_native()` 显式传入已知记录。历史 JSON 缺少此字段时仍可读取。[重新分块与追溯](../../../docs/examples/chunking.md#复用解析产物生成新版本)
 
+只需要分块时，传入 `parsed.document`。需要后续重新分块时，保存完整的 `ParsedDocument` JSON。托管知识库入库时传 `ParsedDocument` 和同一份原始文件字节，组件按摘要核对二者的对应关系。[分块组件](../chunking/README.md) · [托管知识库](../knowledge_base/README.md)
+
 以下 Python 代码块可分别保存为仓库根目录下的 `example.py`，通过 `uv run --no-sync python example.py` 运行。TXT 使用核心依赖，其他格式需要 `parsing` 依赖组。标准 PDF 另需模型目录，原生 PDF 需要一份带文本层的本地 PDF。
 
 ```sh
@@ -261,6 +263,37 @@ for start, end, _, bbox in mapped_paragraphs:
 ```
 
 `from_native()` 使用调用方提供的 `revision_id`。解析结果的 `native_json` 可用于恢复原生模型对象。写入业务存储时，也可以直接序列化 `ParsedDocument`，保留规范文本与映射。
+
+## 保存和恢复解析产物
+
+完整的解析 JSON 带有规范文本、标题、表格范围、来源映射和解析记录。`native_json` 用于恢复 Docling 原生对象，`markdown` 可供预览和导出；后续重新分块读取完整解析 JSON。同一份解析产物可以生成多个分块版本。
+
+```python
+from hashlib import sha256
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from agent_components.core.contracts import ParsedDocument
+from agent_components.parsing import DoclingParser
+
+source_path = Path("examples/data/contract.md")
+parsed = DoclingParser().parse(source_path, document_id="DEMO-2026-001")
+
+with TemporaryDirectory() as directory:
+    json_path = Path(directory) / "contract.parsed.json"
+    json_path.write_text(parsed.model_dump_json(), encoding="utf-8")
+    restored = ParsedDocument.model_validate_json(json_path.read_bytes())
+
+assert restored == parsed
+assert restored.provenance is not None
+assert restored.provenance.source_sha256 == sha256(source_path.read_bytes()).hexdigest()
+assert any(element.kind == "heading" for element in restored.document.elements)
+print(restored.document.id, restored.document.revision_id)
+```
+
+直接保存到知识库时，可用 `ManagedKnowledgeBase.save_parsed(parsed, source=source_path.read_bytes(), policy=policy)` 保存原文件、完整解析 JSON、Markdown 和分块版本。若 `from_native()` 的解析记录缺少源摘要，入库时会以源文档的 `revision_id` 和原文件的 SHA-256 比对。外部解析产物使用业务版本号时，应提供真实的 `ParseProvenance.source_sha256`。[完整入库示例](../../../docs/examples/knowledge-base.md#创建入库发布和查询)
+
+按页解析时，每个批次的规范文本和元素范围对应自己的页批。需要以整份 PDF 建立一个知识库文档时，使用整份解析结果；采用分批入库时，由调用方确定批次标识及合并策略。
 
 ## 读取带文本层的 PDF
 

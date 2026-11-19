@@ -72,6 +72,7 @@ def mmr_select(
     limit: int = 10,
     relevance_weight: float = 0.5,
     max_candidates: int = 2000,
+    use_candidate_relevance: bool = False,
 ) -> SelectionResult:
     """执行有界候选集上的最大边际相关性选择。
 
@@ -81,6 +82,7 @@ def mmr_select(
         limit: 最多保留数量。
         relevance_weight: lambda，范围为零到一。
         max_candidates: 拒绝超大候选池，限制 O(n*k) 比较工作量。
+        use_candidate_relevance: 使用上游已归一化的融合或重排相关度。
 
     Returns:
         按 lambda*cos(query,item)-(1-lambda)*max_cos(item,selected) 选择的结果。
@@ -102,7 +104,13 @@ def mmr_select(
             raise ValueError("MMR requires equal-dimensional candidate vectors")
         vectors.append(_unit(item.vector))
     # relevance[i] 用查询与候选的余弦相似度计算，与 LanceDB 返回的距离分数无关。
-    relevance = [_cosine(query, vector) for vector in vectors]
+    relevance = (
+        [item.relevance for item in candidates]
+        if use_candidate_relevance
+        else [_cosine(query, vector) for vector in vectors]
+    )
+    if use_candidate_relevance and any(not 0 <= score <= 1 for score in relevance):
+        raise ValueError("upstream MMR relevance must be normalized to [0, 1]")
     remaining = list(range(len(candidates)))
     selected: list[int] = []
     redundancy = [0.0] * len(candidates)
@@ -126,6 +134,45 @@ def mmr_select(
             value = _cosine(vectors[index], vectors[best])
             redundancy[index] = value if len(selected) == 1 else max(redundancy[index], value)
     return SelectionResult(selected=tuple(candidates[i] for i in selected))
+
+
+def exact_deduplicate(
+    candidates: Sequence[RetrievalCandidate], *, max_candidates: int = 2000
+) -> SelectionResult:
+    """按排序去除重复文本及同文档版本的完全相同原文区间。"""
+    _check_candidates(candidates, max_candidates)
+    seen: dict[tuple[str, str, int, int, str], str] = {}
+    exact: dict[str, str] = {}
+    kept = []
+    dropped = []
+    for item in candidates:
+        chunk = item.chunk
+        position = (
+            chunk.document_id,
+            chunk.revision_id,
+            chunk.start,
+            chunk.end,
+            chunk.context_prefix,
+        )
+        normalized = _normalized(chunk)
+        duplicate = seen.get(position) or exact.get(normalized)
+        if duplicate is not None:
+            dropped.append(
+                SelectionDrop(
+                    chunk_id=chunk.id,
+                    duplicate_of=duplicate,
+                    similarity=1,
+                    reason="source_interval" if position in seen else "normalized_exact",
+                )
+            )
+            continue
+        seen[position] = exact[normalized] = chunk.id
+        kept.append(item)
+    return SelectionResult(selected=tuple(kept), dropped=tuple(dropped))
+
+
+def _normalized(chunk: Chunk) -> str:
+    return " ".join(unicodedata.normalize("NFKC", chunk.index_text).casefold().split())
 
 
 def deduplicate(
@@ -161,9 +208,7 @@ def deduplicate(
     # 按召回顺序扫描。只有已保留的候选才会作为后续比较的参照。
     for item in candidates:
         # 比较 index_text（上下文前缀加正文），统一全半角、大小写和连续空白。
-        normalized = " ".join(
-            unicodedata.normalize("NFKC", item.chunk.index_text).casefold().split()
-        )
+        normalized = _normalized(item.chunk)
         # 精确去重在这里判定。规范化文本相同时，保留先入选的块，标记当前块为重复项。
         if normalized in exact:
             dropped.append(

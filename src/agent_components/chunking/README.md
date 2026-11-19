@@ -36,7 +36,7 @@ uv sync --locked --extra chunking --extra parsing --extra agent
 | `ChunkPolicy` / `ChunkResult` | [配置和结果序列化](#配置结果与稳定身份)、[表格预算](#表格分片与溢出) |
 | `ParentChildBuilder.build()` | [业务范围和部分覆盖](#手动指定父块范围) |
 | `ParentChildBuilder.build_sections()` / `SectionBuilder.build()` | [Word 章节](#word-父子分块示例)、[业务标题与序言](#显式标题与序言) |
-| `Rechunker.rechunk()` | [复用解析产物生成新版本](../../../docs/examples/chunking.md#复用解析产物生成新版本) |
+| `Rechunker.rechunk()` | [复用解析产物生成新版本](#复用解析产物生成新版本) |
 | `SourceMapper.resolve()` | [元素级来源和仅文本回退](#来源定位) |
 | `StreamingChunker.iter_file()` / `iter_text()` | [文件和分段输入](#流式分块示例)、[流式表格和资源限制](#跨窗口表格与资源上限) |
 
@@ -300,6 +300,49 @@ assert empty.chunks == empty.covered_ranges == ()
 ```
 
 普通分块的 `covered_ranges` 表示全文处理范围。父子分块返回实际选用的父范围，可能有间隔。块身份由文档 ID、版本、内容、策略配置和注入能力版本共同确定。`index_text` 是属性，恢复 `Chunk` 后读取即可。
+
+## 复用解析产物生成新版本
+
+读取已保存的 `ParsedDocument` JSON 后，可用 `Rechunker` 更改子块预算、章节范围或分块策略。返回的 `trace` 记录解析产物摘要、可选的上一个分块版本、章节配置及注入后端版本。相同产物、配置、引用和前一版本产生相同的新版本 ID。
+
+```python
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from agent_components.chunking import ChunkPolicy, Rechunker, SectionOptions
+from agent_components.core.contracts import ParsedDocument
+from agent_components.parsing import DoclingParser
+
+source = Path("examples/data/contract.txt")
+parsed = DoclingParser().parse(source, document_id="DEMO-2026-001")
+
+with TemporaryDirectory() as directory:
+    artifact = Path(directory) / "contract.parsed.json"
+    artifact.write_text(parsed.model_dump_json(), encoding="utf-8")
+    restored = ParsedDocument.model_validate_json(artifact.read_bytes())
+
+rechunker = Rechunker()
+first = rechunker.rechunk(restored, ChunkPolicy(strategy="character", size=160))
+split = rechunker.rechunk(
+    restored,
+    ChunkPolicy(strategy="character", size=80),
+    section_options=SectionOptions(max_parent_chars=320),
+    previous_revision_id=first.document.revision_id,
+)
+
+assert first.document.revision_id != split.document.revision_id
+assert split.trace.previous_revision_id == first.document.revision_id
+assert split.trace.matches_artifact(restored)
+assert all(len(parent.index_text) <= 320 for parent in split.chunks.parents)
+assert all(
+    chunk.text == split.document.text[chunk.start : chunk.end] for chunk in split.chunks.leaves
+)
+print(split.document.revision_id, len(split.chunks.leaves))
+```
+
+托管知识库用 `kb.rechunk_revision(document_id, revision_id, policy, section_options=...)` 从仓储读取原有解析产物，直接保存新的草稿。发布新版本前需要独立构建并核验索引。[知识库版本流程](../knowledge_base/README.md)
+
+向量与 BM25 索引使用 `ChunkResult.leaves` 和对应的 `chunk.index_text`。检索命中后可通过 `parent_id`、`ordinal` 读取同版本中可见的父块和邻块。证据展示使用 `chunk.text` 及 `source_refs`，表头前缀不会改变原文坐标。[检索结果与扩展参数](../retrieval/README.md)
 
 ## 手动指定父块范围
 

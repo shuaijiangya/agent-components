@@ -8,9 +8,12 @@ from pathlib import Path
 from agent_components.core.errors import MissingDependencyError
 from agent_components.retrieval.vector_store import IndexMatch, IndexRecord, VectorHit
 
+_MATCH_COLUMNS = ("id", "document_id", "revision_id", "text")
+_FTS_TOKENIZER = "icu"
+
 
 class LanceDBVectorStore:
-    """提供本地进程内的向量索引写入和查询。
+    """提供本地进程内的向量和全文索引写入与查询。
 
     不启动独立服务；本类还不是完整 RAG 或知识库生命周期组件。
     """
@@ -76,11 +79,78 @@ class LanceDBVectorStore:
         ).when_matched_update_all().when_not_matched_insert_all().execute(rows)
 
     def build_fts(self) -> None:
-        """构建或替换 text 字段的全文索引。
+        """用 ICU 分词构建或刷新 text 字段的原生全文索引。"""
+        from lancedb.index import FTS
 
-        仅建立后端索引；中文分词、BM25 查询和融合检索接口尚未封装。
-        """
-        self._table.create_fts_index("text", replace=True)
+        self._table.create_index(
+            "text",
+            config=FTS(base_tokenizer=_FTS_TOKENIZER, stem=False, remove_stop_words=False),
+            replace=True,
+        )
+
+    def get_records(self, *, chunk_ids: Sequence[str]) -> tuple[IndexRecord, ...]:
+        """按块 ID 读取现有记录，重复 ID 只返回一条。"""
+        predicate = _ids_filter("id", chunk_ids)
+        if predicate is None:
+            return ()
+        rows = self._table.search().where(predicate, prefilter=True).to_list()
+        return tuple(IndexRecord.model_validate(row) for row in rows)
+
+    def delete_records(self, *, chunk_ids: Sequence[str]) -> None:
+        """删除指定块的记录，接受空范围和重复调用。"""
+        predicate = _ids_filter("id", chunk_ids)
+        if predicate is not None:
+            self._table.delete(predicate)
+
+    def recall_keywords(
+        self, query: str, *, limit: int, chunk_ids: Sequence[str]
+    ) -> tuple[IndexMatch, ...]:
+        """在允许的块范围内执行原生中文分词和 BM25 召回。"""
+        from lancedb.query import MatchQuery
+
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        predicate = _ids_filter("id", chunk_ids)
+        if predicate is None or not query.strip():
+            return ()
+        if not self._has_keyword_index():
+            try:
+                self.build_fts()
+            except RuntimeError:
+                # 其他实例可能同时完成了索引创建。
+                if not self._has_keyword_index():
+                    raise
+        # LanceDB 的 Pydantic dataclass 参数在运行时提供默认值。
+        match_query = MatchQuery(query, "text")  # type: ignore[call-arg]
+        rows = (
+            self._table.search(match_query, query_type="fts")
+            .where(predicate, prefilter=True)
+            .limit(limit)
+            .select([*_MATCH_COLUMNS, "_score"])
+            .to_list()
+        )
+        return tuple(
+            IndexMatch(
+                id=row["id"],
+                document_id=row["document_id"],
+                revision_id=row["revision_id"],
+                text=row["text"],
+                score=row["_score"],
+                score_kind="bm25",
+            )
+            for row in rows
+        )
+
+    def _has_keyword_index(self) -> bool:
+        """检查当前表版本是否已有中文全文索引。"""
+        return any(
+            index.name == "text_idx"
+            and index.index_type == "FTS"
+            and index.columns == ["text"]
+            and index.index_details is not None
+            and index.index_details.get("base_tokenizer") == _FTS_TOKENIZER
+            for index in self._table.list_indices()
+        )
 
     def search_vector(
         self, vector: Sequence[float], *, limit: int = 10, document_ids: Sequence[str] | None = None
@@ -133,20 +203,14 @@ class LanceDBVectorStore:
         for column, identifiers in (("document_id", document_ids), ("id", chunk_ids)):
             if identifiers is None:
                 continue
-            if (
-                not isinstance(identifiers, Sequence)
-                or isinstance(identifiers, (str, bytes, bytearray))
-                or any(not isinstance(value, str) for value in identifiers)
-            ):
-                raise TypeError("filter IDs must be a sequence of strings, such as a list or tuple")
-            if not identifiers:
+            predicate = _ids_filter(column, identifiers)
+            if predicate is None:
                 return ()
-            values = ",".join("'" + value.replace("'", "''") + "'" for value in identifiers)
-            filters.append(f"{column} IN ({values})")
+            filters.append(predicate)
         query = self._table.search(list(vector)).limit(limit)
         if filters:
             query = query.where(" AND ".join(filters), prefilter=True)
-        columns = ["id", "document_id", "revision_id", "text", "_distance"]
+        columns = [*_MATCH_COLUMNS, "_distance"]
         if with_vectors:
             columns.append("vector")
         return tuple(
@@ -163,3 +227,17 @@ class LanceDBVectorStore:
             )
             for row in query.select(columns).to_list()
         )
+
+
+def _ids_filter(column: str, identifiers: Sequence[str]) -> str | None:
+    """校验显式范围并生成转义后的 ID 过滤表达式。"""
+    if (
+        not isinstance(identifiers, Sequence)
+        or isinstance(identifiers, (str, bytes, bytearray))
+        or any(not isinstance(value, str) for value in identifiers)
+    ):
+        raise TypeError("filter IDs must be a sequence of strings, such as a list or tuple")
+    if not identifiers:
+        return None
+    values = ",".join("'" + value.replace("'", "''") + "'" for value in dict.fromkeys(identifiers))
+    return f"{column} IN ({values})"

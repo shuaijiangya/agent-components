@@ -9,6 +9,31 @@ from collections.abc import Sequence
 from agent_components.core.contracts import Chunk, Contract, SourceRef
 
 
+def _merge_source_intervals(refs: Sequence[SourceRef]) -> tuple[SourceRef, ...]:
+    """按相同来源锚点合并重叠区间，保留不同页码、元素、精度或矩形。"""
+    grouped: dict[SourceRef, list[tuple[int, int]]] = {}
+    unlocated = set()
+    for ref in refs:
+        key = ref.model_copy(update={"start": None, "end": None})
+        ranges = grouped.setdefault(key, [])
+        if ref.start is not None and ref.end is not None:
+            ranges.append((ref.start, ref.end))
+        else:
+            unlocated.add(key)
+    result = []
+    for key, ranges in grouped.items():
+        if key in unlocated:
+            result.append(key)
+        merged: list[tuple[int, int]] = []
+        for start, end in sorted(ranges):
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        result.extend(key.model_copy(update={"start": start, "end": end}) for start, end in merged)
+    return tuple(result)
+
+
 class ContextWindow(Contract):
     """承载一个文档版本中连续且去除重叠的上下文。
 
@@ -61,6 +86,7 @@ class ContextExpander:
         parent_mode: str = "none",
         stay_in_parent: bool = True,
         max_characters: int = 8000,
+        allow_missing_parents: bool = False,
     ) -> ContextResult:
         """补充父块或邻块，按命中顺序应用整体预算。
 
@@ -72,6 +98,7 @@ class ContextExpander:
             parent_mode: none 不补父块，append 同时补父块，replace 用父块替换子块。
             stay_in_parent: 默认不跨父块扩展相邻叶子。
             max_characters: 合并后的正文及重复表头总字符上限。
+            allow_missing_parents: 父块被权限过滤时保留可见叶子与邻块。
 
         Returns:
             合并重叠后的窗口、采用的块身份和预算遗漏身份。
@@ -115,15 +142,18 @@ class ContextExpander:
                         related.append(neighbor)
             if parent_mode != "none" and hit.parent_id:
                 parent = by_id.get(hit.parent_id)
-                if (
-                    parent is None
-                    or parent.kind != "parent"
+                if parent is None:
+                    if not allow_missing_parents:
+                        raise ValueError("parent is missing from visible corpus")
+                elif (
+                    parent.kind != "parent"
                     or (parent.document_id, parent.revision_id)
                     != (hit.document_id, hit.revision_id)
                     or not parent.start <= hit.start < hit.end <= parent.end
                 ):
                     raise ValueError("parent is missing or inconsistent in visible corpus")
-                related = [parent] if parent_mode == "replace" else related + [parent]
+                else:
+                    related = [parent] if parent_mode == "replace" else related + [parent]
             for chunk in related:
                 if chunk.id not in seen:
                     seen.add(chunk.id)
@@ -137,7 +167,12 @@ class ContextExpander:
             else:
                 selected.append(chunk)
         return ContextResult(
-            windows=self._assemble(selected),
+            windows=tuple(
+                window.model_copy(
+                    update={"source_refs": _merge_source_intervals(window.source_refs)}
+                )
+                for window in self._assemble(selected)
+            ),
             selected_ids=tuple(c.id for c in selected),
             omitted_ids=tuple(omitted),
         )

@@ -2,7 +2,8 @@ import pytest
 
 from agent_components.chunking import Chunker, ChunkPolicy, ParentChildBuilder
 from agent_components.context import ContextExpander
-from agent_components.core.contracts import Document
+from agent_components.core.contracts import Document, SourceRef
+from agent_components.retrieval import exact_deduplicate
 from agent_components.selection import RetrievalCandidate, deduplicate, mmr_select
 
 
@@ -63,6 +64,20 @@ def test_exact_and_chinese_near_duplicate_decisions_are_traceable():
     assert deduplicate([], threshold=1).selected == ()
 
 
+def test_exact_selection_distinguishes_source_interval_and_normalized_text():
+    first, same_text, different_amount = candidates(
+        ["Ａ公司付款金额为3200元。", "a公司付款金额为3200元。", "a公司付款金额为3201元。"],
+        [None] * 3,
+    )
+    duplicate_id = first.model_copy(
+        update={"chunk": first.chunk.model_copy(update={"id": "legacy-source-id"})}
+    )
+    result = exact_deduplicate([first, duplicate_id, same_text, different_amount])
+    assert result.selected == (first, different_amount)
+    assert [drop.reason for drop in result.dropped] == ["source_interval", "normalized_exact"]
+    assert all(drop.duplicate_of == first.chunk.id for drop in result.dropped)
+
+
 def test_expansion_stays_within_document_version_and_parent_then_merges_overlap():
     doc = Document(id="d", revision_id="r1", text="abcdefghijklmnopqrstuvwxyz")
     result = ParentChildBuilder().build(
@@ -78,6 +93,7 @@ def test_expansion_stays_within_document_version_and_parent_then_merges_overlap(
     assert window.document_id == "d" and window.revision_id == "r1"
     assert window.text == doc.text[window.start : window.end]
     assert window.start == 0 and window.end == 13
+    assert [(ref.start, ref.end) for ref in window.source_refs] == [(0, 13)]
     assert len(window.text) < sum(
         len(c.text) for c in result.leaves if c.parent_id == hit.parent_id
     )
@@ -105,6 +121,35 @@ def test_neighbor_expansion_stops_at_invisible_gap_and_budget_is_reported():
     assert limited.windows[0].text == "abcd"
     assert limited.omitted_ids
     assert sum(len(w.index_text) for w in limited.windows) <= 4
+
+
+def test_context_merges_only_ranges_from_the_same_source_anchor():
+    chunks = (
+        Chunker()
+        .chunk(
+            Document(id="d", text="abcdef"), ChunkPolicy(strategy="character", size=4, overlap=2)
+        )
+        .leaves
+    )
+    anchor = SourceRef(input_id="file", page=1, precision="element", element_id="#/texts/0")
+    other = anchor.model_copy(update={"page": 2})
+    left = chunks[0].model_copy(
+        update={"source_refs": (anchor, anchor.model_copy(update={"start": 0, "end": 4}))}
+    )
+    right = chunks[1].model_copy(
+        update={
+            "source_refs": (
+                anchor.model_copy(update={"start": 2, "end": 6}),
+                other.model_copy(update={"start": 2, "end": 6}),
+            )
+        }
+    )
+    (window,) = ContextExpander().expand([left], [left, right]).windows
+    assert [(ref.page, ref.start, ref.end) for ref in window.source_refs] == [
+        (1, None, None),
+        (1, 0, 6),
+        (2, 2, 6),
+    ]
 
 
 def test_expansion_rejects_out_of_corpus_hits_missing_parents_and_conflicting_overlap():

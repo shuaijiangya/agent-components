@@ -19,8 +19,8 @@
 | `src/agent_components/parsing/__init__.py` | `7ea81934a00b3777b7bb827eb8dc78b599e2a664f3fbf5ca7433119880124190` |
 | `src/agent_components/parsing/docling.py` | `f28a7d3daf4d717dd564eb56101ba68d84a48dd34a0302be39acff567731d4f4` |
 | `src/agent_components/chunking/streaming.py` | `22aa613a2391cdb6b750c90b87a4208f8ff9b82f9148b9e02af08b3fd4ed9deb` |
-| `src/agent_components/retrieval/context.py` | `0ae7cfc7db209b20097ab4e43579d99287e372166188ebcb5475c59109b8a80a` |
-| `src/agent_components/retrieval/selection.py` | `fb95409280c2c7c8eb3cbe3606cad9105d36c24de5d4309e7756f5f2de4233bb` |
+| `src/agent_components/retrieval/context.py` | `32e5a77f0d9b3a69ed243ca44639bb3c049948364935fc4a91cbb6a88f8adba2` |
+| `src/agent_components/retrieval/selection.py` | `c54d25426473958f15ec355d6693f068267527c3a6e15e002d1995b312935e8c` |
 
 ## src/agent_components/core/contracts.py
 
@@ -2893,6 +2893,31 @@ from collections.abc import Sequence
 from agent_components.core.contracts import Chunk, Contract, SourceRef
 
 
+def _merge_source_intervals(refs: Sequence[SourceRef]) -> tuple[SourceRef, ...]:
+    """按相同来源锚点合并重叠区间，保留不同页码、元素、精度或矩形。"""
+    grouped: dict[SourceRef, list[tuple[int, int]]] = {}
+    unlocated = set()
+    for ref in refs:
+        key = ref.model_copy(update={"start": None, "end": None})
+        ranges = grouped.setdefault(key, [])
+        if ref.start is not None and ref.end is not None:
+            ranges.append((ref.start, ref.end))
+        else:
+            unlocated.add(key)
+    result = []
+    for key, ranges in grouped.items():
+        if key in unlocated:
+            result.append(key)
+        merged: list[tuple[int, int]] = []
+        for start, end in sorted(ranges):
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        result.extend(key.model_copy(update={"start": start, "end": end}) for start, end in merged)
+    return tuple(result)
+
+
 class ContextWindow(Contract):
     """承载一个文档版本中连续且去除重叠的上下文。
 
@@ -2945,6 +2970,7 @@ class ContextExpander:
         parent_mode: str = "none",
         stay_in_parent: bool = True,
         max_characters: int = 8000,
+        allow_missing_parents: bool = False,
     ) -> ContextResult:
         """补充父块或邻块，按命中顺序应用整体预算。
 
@@ -2956,6 +2982,7 @@ class ContextExpander:
             parent_mode: none 不补父块，append 同时补父块，replace 用父块替换子块。
             stay_in_parent: 默认不跨父块扩展相邻叶子。
             max_characters: 合并后的正文及重复表头总字符上限。
+            allow_missing_parents: 父块被权限过滤时保留可见叶子与邻块。
 
         Returns:
             合并重叠后的窗口、采用的块身份和预算遗漏身份。
@@ -2999,15 +3026,18 @@ class ContextExpander:
                         related.append(neighbor)
             if parent_mode != "none" and hit.parent_id:
                 parent = by_id.get(hit.parent_id)
-                if (
-                    parent is None
-                    or parent.kind != "parent"
+                if parent is None:
+                    if not allow_missing_parents:
+                        raise ValueError("parent is missing from visible corpus")
+                elif (
+                    parent.kind != "parent"
                     or (parent.document_id, parent.revision_id)
                     != (hit.document_id, hit.revision_id)
                     or not parent.start <= hit.start < hit.end <= parent.end
                 ):
                     raise ValueError("parent is missing or inconsistent in visible corpus")
-                related = [parent] if parent_mode == "replace" else related + [parent]
+                else:
+                    related = [parent] if parent_mode == "replace" else related + [parent]
             for chunk in related:
                 if chunk.id not in seen:
                     seen.add(chunk.id)
@@ -3021,7 +3051,12 @@ class ContextExpander:
             else:
                 selected.append(chunk)
         return ContextResult(
-            windows=self._assemble(selected),
+            windows=tuple(
+                window.model_copy(
+                    update={"source_refs": _merge_source_intervals(window.source_refs)}
+                )
+                for window in self._assemble(selected)
+            ),
             selected_ids=tuple(c.id for c in selected),
             omitted_ids=tuple(omitted),
         )
@@ -3155,6 +3190,7 @@ def mmr_select(
     limit: int = 10,
     relevance_weight: float = 0.5,
     max_candidates: int = 2000,
+    use_candidate_relevance: bool = False,
 ) -> SelectionResult:
     """执行有界候选集上的最大边际相关性选择。
 
@@ -3164,6 +3200,7 @@ def mmr_select(
         limit: 最多保留数量。
         relevance_weight: lambda，范围为零到一。
         max_candidates: 拒绝超大候选池，限制 O(n*k) 比较工作量。
+        use_candidate_relevance: 使用上游已归一化的融合或重排相关度。
 
     Returns:
         按 lambda*cos(query,item)-(1-lambda)*max_cos(item,selected) 选择的结果。
@@ -3185,7 +3222,13 @@ def mmr_select(
             raise ValueError("MMR requires equal-dimensional candidate vectors")
         vectors.append(_unit(item.vector))
     # relevance[i] 用查询与候选的余弦相似度计算，与 LanceDB 返回的距离分数无关。
-    relevance = [_cosine(query, vector) for vector in vectors]
+    relevance = (
+        [item.relevance for item in candidates]
+        if use_candidate_relevance
+        else [_cosine(query, vector) for vector in vectors]
+    )
+    if use_candidate_relevance and any(not 0 <= score <= 1 for score in relevance):
+        raise ValueError("upstream MMR relevance must be normalized to [0, 1]")
     remaining = list(range(len(candidates)))
     selected: list[int] = []
     redundancy = [0.0] * len(candidates)
@@ -3209,6 +3252,45 @@ def mmr_select(
             value = _cosine(vectors[index], vectors[best])
             redundancy[index] = value if len(selected) == 1 else max(redundancy[index], value)
     return SelectionResult(selected=tuple(candidates[i] for i in selected))
+
+
+def exact_deduplicate(
+    candidates: Sequence[RetrievalCandidate], *, max_candidates: int = 2000
+) -> SelectionResult:
+    """按排序去除重复文本及同文档版本的完全相同原文区间。"""
+    _check_candidates(candidates, max_candidates)
+    seen: dict[tuple[str, str, int, int, str], str] = {}
+    exact: dict[str, str] = {}
+    kept = []
+    dropped = []
+    for item in candidates:
+        chunk = item.chunk
+        position = (
+            chunk.document_id,
+            chunk.revision_id,
+            chunk.start,
+            chunk.end,
+            chunk.context_prefix,
+        )
+        normalized = _normalized(chunk)
+        duplicate = seen.get(position) or exact.get(normalized)
+        if duplicate is not None:
+            dropped.append(
+                SelectionDrop(
+                    chunk_id=chunk.id,
+                    duplicate_of=duplicate,
+                    similarity=1,
+                    reason="source_interval" if position in seen else "normalized_exact",
+                )
+            )
+            continue
+        seen[position] = exact[normalized] = chunk.id
+        kept.append(item)
+    return SelectionResult(selected=tuple(kept), dropped=tuple(dropped))
+
+
+def _normalized(chunk: Chunk) -> str:
+    return " ".join(unicodedata.normalize("NFKC", chunk.index_text).casefold().split())
 
 
 def deduplicate(
@@ -3244,9 +3326,7 @@ def deduplicate(
     # 按召回顺序扫描。只有已保留的候选才会作为后续比较的参照。
     for item in candidates:
         # 比较 index_text（上下文前缀加正文），统一全半角、大小写和连续空白。
-        normalized = " ".join(
-            unicodedata.normalize("NFKC", item.chunk.index_text).casefold().split()
-        )
+        normalized = _normalized(item.chunk)
         # 精确去重在这里判定。规范化文本相同时，保留先入选的块，标记当前块为重复项。
         if normalized in exact:
             dropped.append(

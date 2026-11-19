@@ -18,14 +18,14 @@ class StorageBinding(Contract):
 
 
 @dataclass(frozen=True)
-class StorageBackends:
+class StorageBackends[DocumentsT: KnowledgeRepository, VectorsT: VectorStore]:
     """保存一次解析得到的存储对象，供同一次业务请求使用。"""
 
-    documents: KnowledgeRepository
-    vectors: VectorStore
+    documents: DocumentsT
+    vectors: VectorsT
 
 
-class StorageRouter:
+class StorageRouter[DocumentsT: KnowledgeRepository, VectorsT: VectorStore]:
     """从应用显式注册的实例解析存储组合。
 
     应用可以在新请求读取新的绑定配置。已解析的请求持有原有实例。
@@ -33,13 +33,13 @@ class StorageRouter:
     """
 
     def __init__(
-        self, *, documents: Mapping[str, KnowledgeRepository], vectors: Mapping[str, VectorStore]
+        self, *, documents: Mapping[str, DocumentsT], vectors: Mapping[str, VectorsT]
     ) -> None:
         """绑定两个独立的适配器集合。"""
         self._documents = dict(documents)
         self._vectors = dict(vectors)
 
-    def resolve(self, binding: StorageBinding) -> StorageBackends:
+    def resolve(self, binding: StorageBinding) -> StorageBackends[DocumentsT, VectorsT]:
         """从同一绑定配置解析两个后端，未注册时抛出 KeyError。"""
         if binding.documents not in self._documents:
             raise KeyError(f"unregistered documents backend: {binding.documents}")

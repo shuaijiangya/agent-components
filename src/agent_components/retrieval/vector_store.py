@@ -2,7 +2,7 @@
 
 import math
 from collections.abc import Sequence
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from pydantic import Field, field_validator
 
@@ -43,7 +43,7 @@ class IndexRecord(Contract):
 class IndexMatch(Contract):
     """承载索引命中及分值语义。
 
-    distance 分数越小表示距离越近，similarity 分数越大表示越相似。
+    distance 越小表示距离越近，similarity 或 bm25 越大表示相关度越高。
     """
 
     id: str
@@ -93,4 +93,30 @@ class VectorStore(Protocol):
         score_kind 为 distance（越小越近）或 similarity（越大越近）。
         include_vectors 为真时，命中携带同一记录的候选向量。
         """
+        ...
+
+
+@runtime_checkable
+class KeywordStore(Protocol):
+    """约定限定范围的关键词召回接口。"""
+
+    def recall_keywords(
+        self, query: str, *, limit: int, chunk_ids: Sequence[str]
+    ) -> tuple[IndexMatch, ...]:
+        """先按允许的块 ID 过滤，再返回至多 limit 条按 BM25 降序排列的命中。
+
+        score_kind 为 bm25，空范围返回空结果。
+        """
+        ...
+
+
+class ManagedVectorStore(VectorStore, Protocol):
+    """扩展向量端口，支持按块 ID 核查和清理索引记录。"""
+
+    def get_records(self, *, chunk_ids: Sequence[str]) -> tuple[IndexRecord, ...]:
+        """读取指定的现有记录，空范围返回空结果。"""
+        ...
+
+    def delete_records(self, *, chunk_ids: Sequence[str]) -> None:
+        """删除指定的现有记录，允许空范围及重复删除。"""
         ...

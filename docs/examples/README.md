@@ -15,11 +15,13 @@ uv run --no-sync python -m examples.documents --help
 
 | 组件 | 可运行入口 | 依赖组 | 文档 |
 | --- | --- | --- | --- |
-| 文档解析／标准 PDF／原生无模型 PDF | `examples.documents parse / native-pdf` | TXT 核心；其他格式 `parsing` | [解析与离线 PDF](parsing.md) |
-| 六种分块／父子块／流式／重新分块 | `examples.documents chunk / parents / stream / rechunk` | 字符、分隔符核心；其余见分块文档 | [分块接入](chunking.md) |
+| 文档解析／标准 PDF／原生无模型 PDF | `examples.documents parse / native-pdf` | TXT 核心；其他格式 `parsing` | [解析包 README](../../src/agent_components/parsing/README.md) · [命令行](parsing.md) |
+| 六种分块／父子块／流式／重新分块 | `examples.documents chunk / parents / stream / rechunk` | 字符、分隔符核心；其余见分块文档 | [分块包 README](../../src/agent_components/chunking/README.md) · [命令行](chunking.md) |
 | 父块与邻块扩展／MMR／去重 | `examples.retrieval context / select` | 核心 | [检索组件](retrieval.md) |
-| 向量索引与查询 | `examples.retrieval index / search` | `retrieval` | [检索组件](retrieval.md) |
-| 知识库内容与存储切换 | `KnowledgeBase`、`StorageRouter` | SQLite 为核心；LanceDB 需 `retrieval` | [知识库与存储适配器](knowledge-base.md) |
+| 向量索引与查询 | `examples.retrieval index / search` | `retrieval` | [向量命令行](retrieval.md#嵌入式-lancedb) |
+| 中文 BM25、混合召回与重排 | `RetrievalPipeline.search` | `retrieval`；按模式注入 Embedding 和重排 Provider | [检索包 README](../../src/agent_components/retrieval/README.md) · [完整检索示例](retrieval.md) |
+| 知识库版本、索引任务、发布与备份 | `ManagedKnowledgeBase` | SQLite 为核心；LanceDB 需 `retrieval` | [知识库包 README](../../src/agent_components/knowledge_base/README.md) · [完整入库示例](knowledge-base.md) |
+| 内容与向量存储切换 | `StorageRouter` | 核心；部署时注册相应适配器 | [存储包 README](../../src/agent_components/storage/README.md) |
 | 公共状态的 CAS 保存 | `examples.state load / save` | `storage` | [状态与执行控制](state-execution.md) |
 | 超时／并发／显式重试 | `examples.execution` | 核心 | [状态与执行控制](state-execution.md) |
 | 模型策略路由／结构化提取 | `examples.models generate / extract` | `agent` | [模型与提取](models.md) |
@@ -40,7 +42,9 @@ uv run --no-sync python -m examples.documents --help
 
 ## 交付边界
 
-当前仍未封装完整知识库生命周期、权限系统、中文 BM25 查询与混合融合、独立重排序模型、字段证据后端、审批持久化恢复和 AgentScope 跨版本迁移。LangExtract 示例验证的是 **Provider 桥接**，没有把任意 JSON Schema 的字段证据提取标为已完成。
+轻量知识库和检索通过 SDK 接入。授权由业务服务提供，知识库在返回结果前复核授权与发布版本。中文 BM25、混合融合和独立重排序的测试证据见验收记录。[知识库与检索验收](../reviews/KNOWLEDGE_RETRIEVAL_REVIEW.md)
+
+LangExtract 示例覆盖 Provider 桥接。任意 JSON Schema 的字段证据后端、审批持久化恢复及 AgentScope 跨版本迁移的状态见 [当前实现边界](../STATUS.md)。
 
 `examples/data` 的合同为虚构资料。带 `fixture` 的向量是确定性接口验收数据，**不代表语义向量或真实检索效果**。业务向量、Tokenizer、相关性标签和模型服务应由使用方接入。
 
