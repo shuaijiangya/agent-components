@@ -48,14 +48,28 @@ uv run --no-sync python -m examples.siliconflow_modes rerank --stream
 
 | 能力 | 一次返回 | 逐步返回 |
 | --- | --- | --- |
-| 普通聊天 | AgentScope 原生客户端返回完整文本 | 原生客户端的 OpenAI HTTP 连接接收 SSE，逐条输出 `text_delta`；正常结束后输出 `completed` |
-| 结构化抽取 | `Extractor.extract` 调用 `ModelClient`，按任务选模并校验 Pydantic 业务结构 | 通过 Chat Completions 的 JSON 模式接收 SSE，`json_delta` 供预览；正常结束且通过 Pydantic 校验后输出 `validated` |
+| 普通聊天 | `ModelClient.chat` 按规则调用模型并返回完整文本 | `ModelClient.stream_chat` 逐条输出 `text_delta`，完整结束后输出 `completed` |
+| 结构化抽取 | `Extractor.extract` 调用 `ModelClient`，按任务选模并校验 Pydantic 业务结构 | `ModelClient.stream_generate` 通过 JSON 模式接收 SSE，校验 Schema 后返回完整对象；示例再执行 Pydantic 校验并输出 `validated` |
 | Embedding | 一个请求返回一批完整向量 | 生成器按批发起请求，逐批返回完整向量、维度与输入起始位置 |
 | 重排 | 一个查询的全部候选作为一批请求，返回完整降序排名 | 多个查询由生成器逐个处理，每个查询返回一份完整排名 |
 
-普通聊天和 SSE 示例默认使用 `general` 别名。非流式抽取按 `structured_extraction` 任务选择 `extract`；两类文本命令均可通过 `--model-alias` 显式选模。SSE 复用原生模型的连接。当前的 `ModelClient.generate` 提供非流式路由、执行控制和日志；流式示例中的终止检查由调用方处理。[硅基流动流式协议](https://docs.siliconflow.cn/docs/userguide/capabilities/stream-mode)
+聊天按配置默认使用 `general`，流式与非流式抽取均按 `structured_extraction` 任务选择 `extract`。两类文本命令都可用 `--model-alias` 显式选模，并用 `--system-prompt` 提供单次系统指令。SSE 与完整响应共用客户端路由和逻辑调用日志。[硅基流动流式协议](https://docs.siliconflow.cn/docs/userguide/capabilities/stream-mode)
 
 流式抽取的 JSON 片段可用于预览。收到 `validated` 后才将对象交给业务逻辑。遇到超时、截断、缺少终止原因或 Schema 校验失败，命令结束并返回失败码，不产生 `validated` 事件。Embedding 和重排的逐步返回由应用层生成器实现。重排每次提交一个查询的完整候选集，保留该候选集上的排序含义。[硅基流动重排接口](https://docs.siliconflow.cn/docs/api/rerank-post)
+
+### 带会话历史的两轮聊天
+
+安装 `storage` 依赖组后，使用同一个会话 ID 和 SQLite 文件。第二条命令会读第一轮历史，并以流式方式返回结果。系统提示词可通过配置文件设置为默认值；这里在第二轮演示单次指定。
+
+```bash
+uv run --no-sync python -m examples.siliconflow_modes chat \
+  --session-id contract-review-001 --memory-db data/memory.sqlite \
+  --prompt '合同尾款在验收后30日内支付，请记住。'
+
+uv run --no-sync python -m examples.siliconflow_modes chat --stream \
+  --session-id contract-review-001 --memory-db data/memory.sqlite \
+  --system-prompt '仅依据当前会话的合同信息回答。' --prompt '尾款支付期限是多久？'
+```
 
 ## 按任务选模型和显式切换
 
@@ -73,14 +87,13 @@ uv run --no-sync python -m examples.models generate examples/data/contract.txt \
 
 ## 发送普通文本请求
 
-模型工厂同时提供按别名索引的 AgentScope 原生客户端。这里用 `general` 别名调用 Qwen 文本模型。
+使用 `ModelClient.chat` 调用 `general` 别名注册的 Qwen 文本模型。传入本轮系统指令和用户消息后，客户端读取配置并发起一次完整调用。
 
 ```python
 import asyncio
 from pathlib import Path
 
-from agentscope.message import UserMsg
-
+from agent_components.models import ChatRequest, Message
 from agent_components.models.providers.openai_compatible import (
     OpenAIModelSettings,
     openai_compatible_clients,
@@ -91,12 +104,16 @@ async def main() -> None:
     settings = OpenAIModelSettings.model_validate_json(
         Path("examples/data/models.json").read_bytes()
     )
-    async with openai_compatible_clients(settings) as (_, native):
-        response = await native["general"](
-            [UserMsg(name="user", content="用一句话概括：尾款在验收后30日内支付。")],
-            max_tokens=80,
+    async with openai_compatible_clients(settings) as (client, _):
+        response = await client.chat(
+            ChatRequest(
+                messages=(Message(role="user", text="用一句话概括：尾款在验收后30日内支付。"),),
+                system_prompt="用中文回答，仅依据原文。",
+                model_alias="general",
+                max_tokens=80,
+            )
         )
-        print(response.content)
+        print(response.text)
 
 
 asyncio.run(main())

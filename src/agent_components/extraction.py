@@ -93,6 +93,7 @@ class Extractor:
                 schema=normalized,
                 model_alias=options.model_alias,
                 request_id=options.request_id,
+                system_prompt=options.system_prompt,
             )
         )
         errors = validate_data(response.data, normalized)

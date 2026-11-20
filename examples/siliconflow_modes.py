@@ -9,28 +9,31 @@ import json
 import math
 import os
 from collections.abc import AsyncGenerator, Iterable, Iterator, Sequence
-from contextlib import aclosing, closing
+from contextlib import AsyncExitStack, aclosing, closing
 from itertools import batched
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_components.core.contracts import Document, ExtractionOptions, ExtractionResult
 from agent_components.extraction import Extractor
-from agent_components.models import ModelClient
+from agent_components.models import (
+    ChatRequest,
+    Message,
+    ModelClient,
+    ModelRequest,
+    StateConversationMemory,
+    TextDelta,
+)
 from agent_components.models.providers.openai_compatible import (
     OpenAICompatibleEmbeddings,
     OpenAIModelSettings,
     openai_compatible_clients,
 )
 from agent_components.models.providers.reranking import HTTPReranker
-from examples._common import run
+from examples._common import protect_sqlite, run
 from examples._models import configure_logs
-
-if TYPE_CHECKING:
-    from openai import AsyncOpenAI
-    from openai.types.chat import ChatCompletionMessageParam
 
 BASE_URL = "https://api.siliconflow.cn/v1"
 EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-0.6B"
@@ -56,69 +59,38 @@ def _emit(event: dict[str, Any]) -> None:
     print(json.dumps(event, ensure_ascii=False, allow_nan=False), flush=True)
 
 
-async def chat_once(model: Any, prompt: str) -> str:
-    """用 AgentScope 原生聊天客户端获得完整文本响应。"""
-    from agentscope.message import TextBlock, UserMsg
-
-    response = await model([UserMsg(name="user", content=prompt)], max_tokens=128)
-    return "".join(block.text for block in response.content if isinstance(block, TextBlock))
-
-
-async def stream_text(
-    client: "AsyncOpenAI",
-    model: str,
-    messages: list["ChatCompletionMessageParam"],
-    *,
-    json_mode: bool = False,
-) -> AsyncGenerator[str, None]:
-    """逐段接收 Chat Completions SSE，可启用 JSON 对象输出。
-
-    流正常结束才返回。超时、截断和取消由调用方处理。
-    """
-    options = {"response_format": {"type": "json_object"}} if json_mode else {}
-    stream = await client.chat.completions.create(
-        model=model, messages=messages, stream=True, max_tokens=256, **options
-    )
-    finished = None
-    async with stream:
-        async for chunk in stream:
-            for choice in chunk.choices:
-                if choice.index != 0:
-                    continue
-                if choice.delta.content:
-                    yield choice.delta.content
-                if choice.finish_reason is not None:
-                    finished = choice.finish_reason
-    # 结束事件缺失或因长度停止时，不能把已经收到的片段当成完整结果。
-    if finished != "stop":
-        raise RuntimeError("Chat stream did not complete normally")
-
-
-async def extract_once(client: ModelClient, model_alias: str | None) -> ExtractionResult:
+async def extract_once(
+    client: ModelClient, model_alias: str | None, system_prompt: str | None
+) -> ExtractionResult:
     """走 SDK 的 Document → ModelClient → Schema 校验链路。"""
     return await Extractor(client).extract(
-        CONTRACT, ContractAmount, ExtractionOptions(model_alias=model_alias)
+        CONTRACT,
+        ContractAmount,
+        ExtractionOptions(model_alias=model_alias, system_prompt=system_prompt),
     )
 
 
-async def extract_stream(client: "AsyncOpenAI", model: str) -> AsyncGenerator[dict[str, Any], None]:
-    """逐段输出 JSON 预览，完成后输出经过严格校验的业务对象。"""
-    schema = json.dumps(ContractAmount.model_json_schema(), ensure_ascii=False)
-    messages: list[ChatCompletionMessageParam] = [
-        {
-            "role": "system",
-            "content": f"从给定文本提取合同金额。只返回符合此 JSON Schema 的 JSON 对象：{schema}",
-        },
-        {"role": "user", "content": CONTRACT.text},
-    ]
-    fragments = []
-    async with aclosing(stream_text(client, model, messages, json_mode=True)) as deltas:
-        async for delta in deltas:
-            fragments.append(delta)
-            yield {"event": "json_delta", "text": delta}
-
-    result = ContractAmount.model_validate_json("".join(fragments), strict=True)
-    yield {"event": "validated", "data": result.model_dump()}
+async def extract_stream(
+    client: ModelClient, model_alias: str | None, system_prompt: str | None
+) -> AsyncGenerator[dict[str, Any], None]:
+    """通过统一客户端选模，预览 JSON 分片并输出业务校验后的结果。"""
+    request = ModelRequest(
+        messages=(
+            Message(role="system", text="只提取原文明确给出的合同金额，单位为人民币元。"),
+            Message(role="user", text=CONTRACT.text),
+        ),
+        schema=ContractAmount.model_json_schema(),
+        model_alias=model_alias,
+        system_prompt=system_prompt,
+        max_tokens=256,
+    )
+    async with aclosing(client.stream_generate(request)) as events:
+        async for event in events:
+            if isinstance(event, TextDelta):
+                yield {"event": "json_delta", "text": event.text}
+            else:
+                data = ContractAmount.model_validate(event.data, strict=True)
+                yield {"event": "validated", "data": data.model_dump()}
 
 
 def embed_once(
@@ -164,26 +136,47 @@ def stream_rankings(
 
 async def _run_text(args: argparse.Namespace) -> int:
     settings = OpenAIModelSettings.model_validate_json(args.config.read_bytes())
-    async with openai_compatible_clients(settings) as (client, native):
-        if args.operation == "extract" and not args.stream:
-            result = await extract_once(client, args.model_alias)
+    async with AsyncExitStack() as stack:
+        memory = None
+        if args.memory_db is not None:
+            from agent_components.storage.sqlite import SQLiteStateStore
+
+            protect_sqlite(args.memory_db, args.config)
+            store = await stack.enter_async_context(
+                SQLiteStateStore(args.memory_db, create_tables=True)
+            )
+            memory = StateConversationMemory(store)
+        client, _ = await stack.enter_async_context(
+            openai_compatible_clients(settings, memory=memory)
+        )
+        if args.operation == "extract":
+            if args.stream:
+                async with aclosing(
+                    extract_stream(client, args.model_alias, args.system_prompt)
+                ) as events:
+                    async for event in events:
+                        _emit(event)
+                return 0
+            result = await extract_once(client, args.model_alias, args.system_prompt)
             _emit(result.model_dump(mode="json"))
             return int(result.status != "success")
 
-        alias = args.model_alias or settings.default_alias
-        model = native[alias]
-        if args.operation == "extract":
-            async with aclosing(extract_stream(model.client, model.model)) as events:
+        request = ChatRequest(
+            messages=(Message(role="user", text=args.prompt or CHAT_PROMPT),),
+            model_alias=args.model_alias,
+            system_prompt=args.system_prompt,
+            session_id=args.session_id,
+            max_tokens=256 if args.stream else 128,
+        )
+        if args.stream:
+            async with aclosing(client.stream_chat(request)) as events:
                 async for event in events:
-                    _emit(event)
-        elif args.stream:
-            messages: list[ChatCompletionMessageParam] = [{"role": "user", "content": CHAT_PROMPT}]
-            async with aclosing(stream_text(model.client, model.model, messages)) as deltas:
-                async for delta in deltas:
-                    _emit({"event": "text_delta", "text": delta})
-            _emit({"event": "completed"})
+                    if isinstance(event, TextDelta):
+                        _emit({"event": "text_delta", "text": event.text})
+                    else:
+                        _emit({"event": "completed"})
         else:
-            _emit({"text": await chat_once(model, CHAT_PROMPT)})
+            _emit({"text": (await client.chat(request)).text})
     return 0
 
 
@@ -224,7 +217,14 @@ def main() -> int:
     parser.add_argument("--stream", action="store_true")
     parser.add_argument("--config", type=Path, default=Path("examples/data/models.json"))
     parser.add_argument("--model-alias", help="为 chat 或 extract 指定已配置的模型别名")
+    parser.add_argument("--system-prompt", help="覆盖单次文本请求的默认系统提示词")
+    parser.add_argument("--prompt", help="chat 本轮用户消息")
+    parser.add_argument("--session-id", help="chat 使用的会话 ID")
+    parser.add_argument("--memory-db", type=Path, help="chat 的 SQLite 历史库")
     args = parser.parse_args()
+    if args.session_id is not None or args.memory_db is not None:
+        if args.operation != "chat" or args.session_id is None or args.memory_db is None:
+            parser.error("--session-id and --memory-db must be used together with chat")
     if args.operation in ("chat", "extract"):
         configure_logs()
         return asyncio.run(_run_text(args))

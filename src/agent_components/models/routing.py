@@ -4,7 +4,7 @@ from collections.abc import Mapping
 
 from agent_components.core.contracts import ModelRequest
 from agent_components.core.errors import RoutingError
-from agent_components.core.ports import StructuredModel
+from agent_components.models.contracts import ChatRequest, ModelBackend
 
 
 class _ModelRouter:
@@ -12,7 +12,7 @@ class _ModelRouter:
 
     def __init__(
         self,
-        models: Mapping[str, StructuredModel],
+        models: Mapping[str, ModelBackend],
         default_alias: str,
         task_routes: Mapping[str, str] | None,
     ) -> None:
@@ -23,7 +23,7 @@ class _ModelRouter:
         if unknown:
             raise RoutingError(f"Unregistered model aliases: {sorted(unknown)}")
 
-    def resolve(self, request: ModelRequest) -> tuple[str, StructuredModel]:
+    def resolve(self, request: ModelRequest | ChatRequest) -> tuple[str, ModelBackend]:
         """解析本次调用的模型别名和已注册的后端。"""
         alias = request.model_alias or self._routes.get(request.task, self._default)
         if alias not in self._models:

@@ -11,6 +11,7 @@ from agent_components.core.contracts import Contract
 from agent_components.core.errors import MissingDependencyError
 from agent_components.execution import ExecutionController, ExecutionPolicy
 from agent_components.models.client import ModelClient
+from agent_components.models.memory import ConversationMemory
 from agent_components.models.providers.agentscope import AgentScopeStructuredModel
 
 
@@ -29,6 +30,8 @@ class OpenAIModelSettings(Contract):
     default_alias: str
     task_routes: dict[str, str] = Field(default_factory=dict)
     execution: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
+    system_prompt: str | None = None
+    max_history_turns: int = Field(default=12, ge=1, strict=True)
 
     @model_validator(mode="after")
     def routes_exist(self) -> Self:
@@ -43,6 +46,8 @@ class OpenAIModelSettings(Contract):
 @asynccontextmanager
 async def openai_compatible_clients(
     settings: OpenAIModelSettings,
+    *,
+    memory: ConversationMemory | None = None,
 ) -> AsyncIterator[tuple[ModelClient, dict[str, Any]]]:
     """创建模型客户端和按别名索引的 AgentScope 原生对象。
 
@@ -50,7 +55,8 @@ async def openai_compatible_clients(
     成功、异常或取消退出时都会在此作用域关闭客户端。
 
     Args:
-        settings: 仅保存环境变量引用、模型路由和执行配置。
+        settings: 端点环境变量引用、模型路由、默认提示词及执行配置。
+        memory: 可选的会话历史，由使用方负责连接生命周期和会话鉴权。
 
     Yields:
         模型客户端与当前作用域内的原生模型映射。
@@ -95,6 +101,9 @@ async def openai_compatible_clients(
                 default_alias=settings.default_alias,
                 task_routes=settings.task_routes,
                 execution=ExecutionController(settings.execution),
+                system_prompt=settings.system_prompt,
+                memory=memory,
+                max_history_turns=settings.max_history_turns,
             ),
             native,
         )

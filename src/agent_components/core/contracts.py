@@ -314,6 +314,8 @@ class ModelRequest(Contract):
     task: str = "structured_extraction"
     model_alias: str | None = None
     request_id: str | None = None
+    system_prompt: str | None = None
+    max_tokens: int | None = Field(default=None, ge=1, strict=True)
 
 
 class ModelOutput(Contract):
@@ -352,6 +354,7 @@ class ExtractionOptions(Contract):
     strategy: Literal["structured", "evidence"] = "structured"
     model_alias: str | None = None
     request_id: str | None = None
+    system_prompt: str | None = None
 
 
 class ExtractionResult(Contract):

@@ -4,7 +4,8 @@
 """
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
+from contextlib import aclosing, asynccontextmanager
 from typing import TypeVar
 
 from pydantic import Field
@@ -48,6 +49,37 @@ class ExecutionController:
         self.policy = policy or ExecutionPolicy()
         self._semaphore = asyncio.Semaphore(self.policy.max_concurrency)
 
+    @asynccontextmanager
+    async def _slot(self) -> AsyncIterator[float]:
+        deadline = asyncio.get_running_loop().time() + self.policy.timeout_seconds
+        async with asyncio.timeout_at(deadline):
+            await self._semaphore.acquire()
+        try:
+            yield deadline
+        finally:
+            self._semaphore.release()
+
+    async def iterate(
+        self, operation: Callable[[], AsyncGenerator[T, None]]
+    ) -> AsyncGenerator[T, None]:
+        """逐段读取供应商响应，排队与读取共享同一个期限。
+
+        每次读取会主动核对剩余期限，交出分片后将控制权还给调用者。
+        提前结束消费时调用者应关闭生成器，由这里关闭供应商连接并释放并发槽。
+        """
+        loop = asyncio.get_running_loop()
+        async with self._slot() as deadline, aclosing(operation()) as stream:
+            while True:
+                if loop.time() >= deadline:
+                    raise TimeoutError("Model stream exceeded its deadline")
+                # 只在等待下一段时绑定超时，调用方处理分片时拥有自己的任务边界。
+                try:
+                    async with asyncio.timeout_at(deadline):
+                        item = await anext(stream)
+                except StopAsyncIteration:
+                    return
+                yield item
+
     async def run(self, operation: Callable[[], Awaitable[T]]) -> T:
         # The deadline includes queueing, attempts and retry waits.
         """执行异步操作并应用排队、总超时和重试策略。
@@ -65,14 +97,13 @@ class ExecutionController:
         Notes:
             其他操作异常及取消原样传播；持有并发槽期间的退避也计入总期限。
         """
-        async with asyncio.timeout(self.policy.timeout_seconds):
-            async with self._semaphore:
-                async for attempt in AsyncRetrying(
-                    stop=stop_after_attempt(self.policy.max_attempts),
-                    wait=wait_random_exponential(max=self.policy.backoff_max_seconds),
-                    retry=retry_if_exception_type(RetryableError),
-                    reraise=True,
-                ):
-                    with attempt:
-                        return await operation()
+        async with self._slot() as deadline, asyncio.timeout_at(deadline):
+            async for attempt in AsyncRetrying(
+                stop=stop_after_attempt(self.policy.max_attempts),
+                wait=wait_random_exponential(max=self.policy.backoff_max_seconds),
+                retry=retry_if_exception_type(RetryableError),
+                reraise=True,
+            ):
+                with attempt:
+                    return await operation()
         raise RuntimeError("retry loop ended without an outcome")
