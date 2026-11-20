@@ -1,6 +1,6 @@
 # 模型路由、结构化提取与 LangExtract
 
-源码：[models.py](../../examples/models.py)、[模型装配](../../examples/_models.py)。通过 AgentScope 2.0.11 原生模型接入 OpenAI 兼容服务；不部署模型网关，不依赖 LangChain。
+示例命令通过模型包装配 AgentScope 2.0.11 原生模型，并请求应用指定的 OpenAI 兼容端点。[模型包 README](../../src/agent_components/models/README.md) · [CLI 源码](../../examples/models.py)
 
 ## 显式配置端点与策略
 
@@ -22,7 +22,7 @@
 
 路由顺序：**请求 `model_alias` > `task_routes[task]` > `default_alias`**。缺失的环境变量、未知路由目标在建立请求前失败。原生客户端在成功、异常及取消时关闭。
 
-AgentScope 2.0.11 使用 `OpenAICredential(api_key=SecretStr(...), base_url=...)` 传入 `OpenAIChatModel`，不是旧教程中的直接 `api_key=` 参数。其他协议可实现公共 `ModelBackend.generate(ModelRequest) -> ModelOutput` 后注入 `ModelClient`。
+SDK 中的 `openai_compatible_clients` 使用 `OpenAICredential` 装配 `OpenAIChatModel`。其他供应商可实现公共 `StructuredModel.generate(ModelRequest) -> ModelOutput` 后注册到 `ModelClient`。[OpenAI 兼容装配源码](../../src/agent_components/models/providers/openai_compatible.py)
 
 ## 模型级结构化输出
 

@@ -11,6 +11,7 @@
 - [轻量知识库组件](src/agent_components/knowledge_base/README.md)
 - [检索组件](src/agent_components/retrieval/README.md)
 - [存储适配与路由](src/agent_components/storage/README.md)
+- [模型调用、规则路由与日志](src/agent_components/models/README.md)
 - [非扫描 PDF：标准解析与原生无模型解析](docs/examples/parsing.md)
 - [当前实现与待完成范围](docs/STATUS.md)
 - [本轮验证结果](docs/VALIDATION.md)
@@ -62,7 +63,7 @@ uv build
 | 重新分块 | `agent_components.chunking.Rechunker.rechunk` | 复用解析产物，派生可并存的新分块版本与追溯记录 |
 | 流式 | `StreamingChunker.iter_text` / `iter_file` | 磁盘快照、有界窗口、跨窗口表格与重叠、资源硬上限 |
 | 检索后处理 | `ContextExpander.expand` / `mmr_select` / `deduplicate` | 父块和邻块、上下文合并、MMR、文本近重复与可追溯结果 |
-| 模型 | `agent_components.models.ModelClient.generate` | 注册别名、任务规则、显式覆盖、逻辑调用日志 |
+| 模型 | `agent_components.models.ModelClient.generate` | 模型配置、规则路由、逻辑调用日志与 Provider 适配。[模型包 README](src/agent_components/models/README.md) |
 | 抽取 | `agent_components.extraction.Extractor.extract` | Document/Chunk＋JSON Schema/Pydantic → 校验结果；无需 Agent/数据库 |
 | 执行控制 | `agent_components.execution.ExecutionController.run` | 总超时、并发、取消和显式瞬时错误重试 |
 | 状态 | `agent_components.storage.sqlite.SQLiteStateStore` | 命名空间与版本条件写入的 StateEnvelope |

@@ -40,8 +40,8 @@ from agent_components.knowledge_base.lifecycle import (
 )
 from agent_components.knowledge_base.repository import _document_scope
 from agent_components.knowledge_base.service import KnowledgeBase
+from agent_components.models.providers.reranking import RerankerProvider
 from agent_components.retrieval.pipeline import RetrievalOptions, RetrievalPipeline, RetrievalResult
-from agent_components.retrieval.reranking import RerankerProvider
 from agent_components.retrieval.vector_store import IndexRecord, KeywordStore, ManagedVectorStore
 
 

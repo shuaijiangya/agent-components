@@ -152,9 +152,7 @@ def test_http_reranker_classifies_a_closed_connection():
 
 
 def test_http_reranker_rejects_a_response_over_the_byte_limit(monkeypatch):
-    monkeypatch.setattr(
-        "agent_components.retrieval.reranking._MAX_RESPONSE_BYTES", 100, raising=False
-    )
+    monkeypatch.setattr("agent_components.models.providers.reranking._MAX_RESPONSE_BYTES", 100)
     body = b'{"results":[{"index":0,"relevance_score":0.5}]}' + b" " * 100
     with _serve_reranker(body) as (url, _):
         with pytest.raises(RerankerError) as caught:

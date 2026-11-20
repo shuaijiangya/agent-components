@@ -9,6 +9,8 @@
 
 core 不导入 AgentScope、Docling、Chonkie、LanceDB 或 LangExtract。重型依赖按可选分组提供；公共数据不要求携带框架实例。
 
+`agent_components.models` 提供模型注册、规则路由和调用日志。`models.providers` 提供 AgentScope、LangExtract、OpenAI 兼容 Embedding 和 HTTP 重排适配。并发、超时和重试由注入的通用执行器提供，分块与检索仍通过各自的 Provider 协议接入模型。[模型包接入](../src/agent_components/models/README.md)
+
 Agent 相关 Adapter 可以接收装配方提供的原生运行。Context、Skill 等协议按能力拆分，后续后端实现同一协议；不将不支持的能力静默转换成近似行为。
 
 StateEnvelope 的 backend/schema_version/payload 表明它是有版本的原生负载，不是跨框架直接续跑保证。真实业务的状态保存时机、审批与执行由使用方编排。

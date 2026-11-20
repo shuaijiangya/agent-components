@@ -52,7 +52,7 @@ for window in result.context.windows:
 
 ## 重排序与分数
 
-`HTTPReranker` 接受完整端点 `endpoint_url`、服务端模型 ID、可选令牌环境变量和以秒为单位的超时。适配 Cohere 兼容的 `model/query/documents` 请求及 `results[index,relevance_score]` 响应。为已授权的候选提交检索文本，使用有权处理这些文档的端点。[Provider 源码](../../src/agent_components/retrieval/reranking.py)
+`HTTPReranker` 接受完整端点 `endpoint_url`、服务端模型 ID、可选令牌环境变量和以秒为单位的超时。适配 Cohere 兼容的 `model/query/documents` 请求及 `results[index,relevance_score]` 响应。为已授权的候选提交检索文本，使用有权处理这些文档的端点。[Provider 源码](../../src/agent_components/models/providers/reranking.py)
 
 ```python
 from agent_components.retrieval import HTTPReranker, RetrievalOptions, RetrievalPipeline

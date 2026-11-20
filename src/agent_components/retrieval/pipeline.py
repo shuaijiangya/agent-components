@@ -8,9 +8,9 @@ from pydantic import Field, model_validator
 
 from agent_components.chunking import EmbeddingProvider
 from agent_components.core.contracts import Chunk, Contract, Issue, SourceRef
+from agent_components.models.providers.reranking import RerankerError, RerankerProvider
 from agent_components.retrieval.context import ContextExpander, ContextResult
 from agent_components.retrieval.fusion import fuse_ranks
-from agent_components.retrieval.reranking import RerankerError, RerankerProvider
 from agent_components.retrieval.selection import (
     RetrievalCandidate,
     SelectionDrop,

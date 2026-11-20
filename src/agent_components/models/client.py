@@ -1,20 +1,14 @@
-"""实现进程内规则模型路由和无正文的调用日志。
+"""组合模型路由、执行控制和逻辑调用日志。"""
 
-供应商协议由 StructuredModel Adapter 负责，不部署独立网关。
-"""
-
-import json
-import logging
 import time
 from collections.abc import Mapping
 from uuid import uuid4
 
 from agent_components.core.contracts import ModelOutput, ModelRequest
-from agent_components.core.errors import RoutingError
 from agent_components.core.ports import StructuredModel
 from agent_components.execution import ExecutionController
-
-logger = logging.getLogger("agent_components.model_calls")
+from agent_components.models.call_logging import _emit_call_event
+from agent_components.models.routing import _ModelRouter
 
 
 class ModelClient:
@@ -42,13 +36,8 @@ class ModelClient:
         Raises:
             RoutingError: 默认或任务规则引用了未注册的模型。
         """
-        self._models = dict(models)
-        self._default = default_alias
-        self._routes = dict(task_routes or {})
+        self._router = _ModelRouter(models, default_alias, task_routes)
         self._execution = execution or ExecutionController()
-        unknown = ({default_alias} | set(self._routes.values())) - self._models.keys()
-        if unknown:
-            raise RoutingError(f"Unregistered model aliases: {sorted(unknown)}")
 
     async def generate(self, request: ModelRequest) -> ModelOutput:
         """执行一次路由后的结构化模型请求。
@@ -66,9 +55,7 @@ class ModelClient:
         Notes:
             日志记录请求标识、模型、时长、用量及异常类型，不记录正文或异常消息。
         """
-        alias = request.model_alias or self._routes.get(request.task, self._default)
-        if alias not in self._models:
-            raise RoutingError(f"Unregistered model alias: {alias}")
+        alias, model = self._router.resolve(request)
         call_id = uuid4().hex
         started = time.monotonic()
         base = {
@@ -77,31 +64,23 @@ class ModelClient:
             "task": request.task,
             "model_alias": alias,
         }
-        logger.info(json.dumps({**base, "event": "model.started"}))
+        _emit_call_event("model.started", base)
         try:
-            output = await self._execution.run(lambda: self._models[alias].generate(request))
+            output = await self._execution.run(lambda: model.generate(request))
         except BaseException as exc:
-            # Error types only: provider messages can contain payloads or credentials.
-            logger.info(
-                json.dumps(
-                    {
-                        **base,
-                        "event": "model.failed",
-                        "error_type": type(exc).__name__,
-                        "duration_seconds": time.monotonic() - started,
-                    }
-                )
+            # 供应商异常消息可能包含正文或凭据。日志只记录异常类型。
+            _emit_call_event(
+                "model.failed",
+                base,
+                error_type=type(exc).__name__,
+                duration_seconds=time.monotonic() - started,
             )
             raise
-        logger.info(
-            json.dumps(
-                {
-                    **base,
-                    "event": "model.completed",
-                    "model": output.model,
-                    "duration_seconds": time.monotonic() - started,
-                    "usage": output.usage.model_dump(),
-                }
-            )
+        _emit_call_event(
+            "model.completed",
+            base,
+            model=output.model,
+            duration_seconds=time.monotonic() - started,
+            usage=output.usage.model_dump(),
         )
         return output
