@@ -52,6 +52,8 @@ if __name__ == "__main__":
 
 已有模型实例时可以实现 `StructuredModel.generate` 并按别名注册到 `ModelClient`。路由顺序为显式别名、任务规则、默认别名。构造时核验任务规则与默认别名，调用时校验显式引用。[模型接口与示例](../../../docs/examples/models.md)
 
+普通聊天、结构化抽取、Embedding 和重排的流式与非流式示例可在同一份脚本中对照。[接入命令和输出约定](../../../docs/examples/siliconflow-models.md#四类调用的流式和非流式示例) · [Python 源码](../../../examples/siliconflow_modes.py)
+
 ## 调用日志与兼容入口
 
 日志提供逻辑调用的开始、完成和失败事件，记录请求 ID、调用 ID、任务、模型别名、耗时和已知用量。启用 `MODEL_CALL_LOGGER_NAME` 对应的 Python logger 接收事件。AgentScope 原生结构化协议可在同一次逻辑调用中尝试多种策略，实际 HTTP 次数由供应商请求遥测核对。[重试与调用次数](../../../docs/examples/models.md#日志重试与调用次数)

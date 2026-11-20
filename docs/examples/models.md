@@ -2,6 +2,8 @@
 
 示例命令通过模型包装配 AgentScope 2.0.11 原生模型，并请求应用指定的 OpenAI 兼容端点。[模型包 README](../../src/agent_components/models/README.md) · [CLI 源码](../../examples/models.py)
 
+使用硅基流动时，可按供应商示例配置两个聊天模型，并调用 Embedding 和重排。[硅基流动多模型示例](siliconflow-models.md)
+
 ## 显式配置端点与策略
 
 [`models.json`](../../examples/data/models.json) 只保存环境变量名称：
