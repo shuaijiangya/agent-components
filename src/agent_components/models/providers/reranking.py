@@ -10,9 +10,11 @@ from http.client import HTTPConnection, HTTPException, HTTPSConnection, Incomple
 from typing import Literal, Protocol
 from urllib.parse import urlsplit
 
-from pydantic import SecretStr
+from pydantic import JsonValue, SecretStr
 
+from agent_components.core.contracts import Usage
 from agent_components.core.errors import ComponentError
+from agent_components.models.call_logging import ModelAttempt, ModelCall
 
 _FailureReason = Literal["configuration", "timeout", "transport", "http_status", "invalid_response"]
 _MAX_RESPONSE_BYTES = 8 * 1024 * 1024
@@ -106,17 +108,44 @@ class HTTPReranker:
         if not documents:
             return ()
 
-        headers = {"Accept": "application/json", "Content-Type": "application/json"}
-        authorization = self._authorization()
-        if authorization is not None:
-            headers["Authorization"] = authorization
-        body = json.dumps(
-            {"model": self._model, "query": query, "documents": documents, "top_n": len(documents)}
-        ).encode("utf-8")
+        token = self._token()
+        logged_documents: list[JsonValue] = list(documents)
+        with ModelCall(
+            "reranking",
+            alias=self._model,
+            operation="rerank",
+            body={"query": query, "documents": logged_documents},
+            secrets=(token,) if token is not None else (),
+        ) as call:
+            headers = {"Accept": "application/json", "Content-Type": "application/json"}
+            if token is not None:
+                if not token or any(not 32 < ord(character) < 127 for character in token):
+                    raise RerankerError("configuration")
+                headers["Authorization"] = f"Bearer {token}"
+            body = json.dumps(
+                {
+                    "model": self._model,
+                    "query": query,
+                    "documents": documents,
+                    "top_n": len(documents),
+                }
+            ).encode("utf-8")
+            with call.attempt(self._model, model=self._model) as attempt:
+                scores, usage = _parse_scores(self._request(headers, body, attempt), len(documents))
+                attempt.complete(usage)
+            call.complete(
+                model=self._model,
+                usage=usage,
+                body=[{"index": item.index, "score": item.score} for item in scores],
+            )
+        return scores
+
+    def _request(self, headers: dict[str, str], body: bytes, attempt: ModelAttempt) -> bytes:
         connection_type = HTTPSConnection if self._scheme == "https" else HTTPConnection
         port = self._port if self._port is not None else connection_type.default_port
         try:
             with closing(connection_type(self._host, port, timeout=self._timeout)) as client:
+                attempt.wire_request()
                 client.request("POST", self._target, body=body, headers=headers)
                 with client.getresponse() as response:
                     if not 200 <= response.status < 300:
@@ -136,19 +165,15 @@ class HTTPReranker:
         except (OSError, HTTPException):
             reason = "transport"
         else:
-            return _parse_scores(response_body, len(documents))
+            return response_body
         raise RerankerError(reason)
 
-    def _authorization(self) -> str | None:
+    def _token(self) -> str | None:
         if self._api_key is not None:
-            token = self._api_key.get_secret_value()
+            return self._api_key.get_secret_value()
         elif self._api_key_env is not None:
-            token = os.environ.get(self._api_key_env, "")
-        else:
-            return None
-        if not token or any(not 32 < ord(character) < 127 for character in token):
-            raise RerankerError("configuration")
-        return f"Bearer {token}"
+            return os.environ.get(self._api_key_env, "")
+        return None
 
 
 def _parse_endpoint(url: str) -> tuple[str, str, int | None, str]:
@@ -171,12 +196,14 @@ def _parse_endpoint(url: str) -> tuple[str, str, int | None, str]:
     return endpoint.scheme, endpoint.hostname, port, target
 
 
-def _parse_scores(body: bytes, count: int) -> tuple[RerankScore, ...]:
+def _parse_scores(body: bytes, count: int) -> tuple[tuple[RerankScore, ...], Usage]:
     try:
         payload: object = json.loads(body)
     except (ValueError, RecursionError):
         payload = None
-    results = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        raise RerankerError("invalid_response")
+    results = payload.get("results")
     if not isinstance(results, list) or len(results) != count:
         raise RerankerError("invalid_response")
 
@@ -197,4 +224,14 @@ def _parse_scores(body: bytes, count: int) -> tuple[RerankScore, ...]:
         if not math.isfinite(value):
             raise RerankerError("invalid_response")
         scores[index] = RerankScore(index=index, score=value)
-    return tuple(scores[index] for index in range(count))
+    meta = payload.get("meta")
+    tokens = meta.get("tokens") if isinstance(meta, dict) else None
+    return tuple(scores[index] for index in range(count)), Usage(
+        input_tokens=_reported_tokens(tokens, "input_tokens"),
+        output_tokens=_reported_tokens(tokens, "output_tokens"),
+    )
+
+
+def _reported_tokens(tokens: object, name: str) -> int | None:
+    value = tokens.get(name) if isinstance(tokens, dict) else None
+    return value if type(value) is int and value >= 0 else None

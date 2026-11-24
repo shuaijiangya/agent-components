@@ -65,11 +65,13 @@ def _serve_reranker(
             thread.join()
 
 
-def test_http_reranker_posts_all_candidates_using_cohere_contract():
+def test_http_reranker_posts_all_candidates_using_cohere_contract(caplog):
     response = (
-        b'{"id":"request-1","results":[{"index":1,"relevance_score":0.9},'
+        b'{"id":"request-1","meta":{"tokens":{"input_tokens":19,"output_tokens":0}},'
+        b'"results":[{"index":1,"relevance_score":0.9},'
         b'{"index":0,"relevance_score":0.25}]}'
     )
+    caplog.set_level("INFO", logger="agent_components.model_calls")
     with _serve_reranker(response) as (url, requests):
         provider: RerankerProvider = HTTPReranker(
             endpoint_url=url, model="example-model", api_key=SecretStr("local-key")
@@ -92,6 +94,27 @@ def test_http_reranker_posts_all_candidates_using_cohere_contract():
             },
         )
     ]
+    events = [
+        json.loads(row.message)
+        for row in caplog.records
+        if row.name == "agent_components.model_calls"
+    ]
+    assert [row["event"] for row in events] == [
+        "model.started",
+        "model.attempt.started",
+        "model.http.request",
+        "model.attempt.completed",
+        "model.completed",
+    ]
+    assert len({row["call_id"] for row in events}) == 1
+    assert len({row["attempt_id"] for row in events[1:-1]}) == 1
+    assert (
+        events[-2]["usage"]
+        == events[-1]["usage"]
+        == {"input_tokens": 19, "output_tokens": 0, "estimated": False}
+    )
+    assert "查询" not in str(events)
+    assert "local-key" not in str(events)
 
 
 def test_http_reranker_reads_bearer_token_from_environment(monkeypatch):

@@ -7,22 +7,25 @@ import asyncio
 import json
 from collections.abc import Iterator, Sequence
 from concurrent.futures import TimeoutError as FutureTimeoutError
-from typing import Any
+from typing import Any, cast
 
 from pydantic import JsonValue
 
 from agent_components.core.contracts import Message, ModelRequest
 from agent_components.core.errors import MissingDependencyError
-from agent_components.models.client import ModelClient
+from agent_components.core.ports import StructuredModel
 
 
 def create_provider(
-    client: ModelClient,
+    client: StructuredModel,
     *,
     loop: asyncio.AbstractEventLoop,
     output_schema: dict[str, JsonValue],
     model_alias: str | None = None,
     timeout_seconds: float = 120,
+    request_id: str | None = None,
+    system_prompt: str | None = None,
+    max_tokens: int | None = None,
 ) -> Any:
     """创建调用统一模型入口的原生 LangExtract Provider。
 
@@ -32,6 +35,9 @@ def create_provider(
         output_schema: LangExtract extraction envelope 的 Schema，不是任意业务结构。
         model_alias: 可选的显式模型别名。
         timeout_seconds: 单次同步等待的上限，必须为正数。
+        request_id: 在多条 LangExtract 提示之间关联同一抽取请求。
+        system_prompt: 单次抽取的系统提示覆盖。
+        max_tokens: 各分段的最大输出 Token 数。
 
     Returns:
         原生 BaseLanguageModel 实例；infer 必须在所属事件循环之外调用。
@@ -46,6 +52,7 @@ def create_provider(
     try:
         from langextract.core.base_model import BaseLanguageModel
         from langextract.core.types import ScoredOutput
+        from langextract.providers.schemas.openai import OpenAISchema
     except ImportError as exc:
         raise MissingDependencyError("extraction") from exc
     if timeout_seconds <= 0:
@@ -56,6 +63,11 @@ def create_provider(
 
         输出保持 LangExtract ScoredOutput 结构，不在此层猜测字段证据。
         """
+
+        @classmethod
+        def get_schema_class(cls) -> type[Any]:
+            """使用原生的 JSON 封套 Schema，模型请求仍由统一客户端负责。"""
+            return cast(type[Any], OpenAISchema)
 
         def infer(self, batch_prompts: Sequence[str], **kwargs: Any) -> Iterator[Any]:
             """逐个请求模型并产出原生评分输出。
@@ -89,6 +101,9 @@ def create_provider(
                             schema=output_schema,
                             task="document_extraction",
                             model_alias=model_alias,
+                            request_id=request_id,
+                            system_prompt=system_prompt,
+                            max_tokens=max_tokens,
                         )
                     ),
                     loop,

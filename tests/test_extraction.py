@@ -103,6 +103,13 @@ async def test_logs_do_not_include_document_or_result_body(caplog):
         for record in caplog.records
         if record.name == "agent_components.model_calls"
     ]
-    assert [e["event"] for e in events] == ["model.started", "model.completed"]
+    assert [e["event"] for e in events] == [
+        "model.started",
+        "model.route",
+        "model.attempt.started",
+        "model.attempt.completed",
+        "model.completed",
+    ]
     assert "private-document-body" not in caplog.text
-    assert "3200" not in caplog.text
+    assert all("request_body" not in event and "response_body" not in event for event in events)
+    assert '"amount"' not in caplog.text

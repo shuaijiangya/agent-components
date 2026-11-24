@@ -83,11 +83,9 @@ Pydantic 定义数据与校验，不负责理解原文；字段提取由模型�
 
 ## 日志、重试与调用次数
 
-`agent_components.model_calls` 在 stderr 输出 `model.started/completed/failed` JSON，包含请求标识、任务、别名、耗时、用量和异常类型；SDK 不写正文或供应商异常消息。不要把正文或密钥放到 request_id、task、别名或模型名称中。
+命令行示例将 JSON 事件写入 stderr，保留 stdout 作为业务输出。服务中可选择结构化标准输出或滚动 JSONL。通过 `call_id` 关联路由、尝试、回退及最终状态，通过 `attempt_id` 核对传输发送和供应商响应。
 
-示例同时关闭 AgentScope 瞬时错误重试和 OpenAI HTTP 客户端重试，但 **AgentScope 结构化输出兼容 fallback 仍存在**：forced、auto、none 等策略在结构不合法或协议不兼容时可能切换。当前锁定的 OpenAI 适配器在测试的结构非法场景会发送 3 次 HTTP 请求。`max_attempts=1` 不能当作“一次 HTTP 请求”的保证。
-
-SDK 日志记录一次逻辑调用，最终成功响应的 usage 不包含所有失败 fallback 的消耗。线上计费和供应商请求级审计应以服务端／供应商遥测补齐；本示例不声称能完整统计账单。
+内置模型工厂的 `max_attempts=1` 将单次逻辑调用限制为最多一次供应商请求。启用备用模型时需要相应增加总尝试数。异常发生在发送前时，传输层发送次数可为零。[路由和日志配置](../../src/agent_components/models/README.md#按能力和上下文选模)
 
 ## LangExtract Provider 桥接
 
@@ -104,4 +102,4 @@ provider = create_provider(
 outputs = await asyncio.to_thread(lambda: list(provider.infer(prompts)))
 ```
 
-这是 Provider 接口验收，不是完整长文档证据组件。任意业务 Schema 到 extraction classes 的映射、少样本示例、长文档分段、多轮提取、原文证据对齐和结果合并仍需独立实现 `EvidenceBackend`。当前 `Extractor(strategy="evidence")` 未注入后端会明确报错，不能用这个桥接示例代替证据能力验收。
+完整长文档字段和证据抽取可直接使用业务组件。[抽取包接入示例](../../src/agent_components/support/README.md)

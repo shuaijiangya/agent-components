@@ -136,7 +136,7 @@ SQLite 是内容版本、删除及发布状态的权威来源。SQLite、文件�
 extract(content, schema, options) -> ExtractionResult
 ```
 
-这是拟定的组件契约，具体实现待开发。
+组件入口为 `agent_components.support.Extractor`。配置、证据字段及运行示例见 [抽取包 README](src/agent_components/support/README.md)。
 
 ### 6.1 输入与输出
 

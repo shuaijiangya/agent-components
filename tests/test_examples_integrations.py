@@ -18,11 +18,14 @@ def model_endpoint(data, *, status=200):
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             calls.append(body)
-            if status != 200:
-                self.send_response(status)
+            response_status = status(body) if callable(status) else status
+            if response_status != 200:
+                self.send_response(response_status)
+                if response_status == 307:
+                    self.send_header("Location", "/redirected")
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
-                self.wfile.write(json.dumps(data).encode())
+                self.wfile.write(json.dumps(data if not callable(data) else {}).encode())
                 return
             if self.path.endswith("/embeddings"):
                 response = {
@@ -58,7 +61,9 @@ def model_endpoint(data, *, status=200):
                                     "type": "function",
                                     "function": {
                                         "name": "generate_structured_output",
-                                        "arguments": json.dumps(data),
+                                        "arguments": json.dumps(
+                                            data(body) if callable(data) else data
+                                        ),
                                     },
                                 }
                             ],
@@ -133,9 +138,128 @@ def test_real_native_model_transport_routing_validation_and_logs(tmp_path, monke
         assert result.returncode == 2
         assert not result.stdout
         assert "StructuredOutputError" in result.stderr
-        # 原生框架先验证，失败走 forced/auto/none 三种兼容策略。
-        # 失败数据不会返回到 SDK Extractor；这与后端已返回数据的校验失败不同。
-        assert len(calls) == 3
+        assert len(calls) == 1
+        events = [json.loads(line) for line in result.stderr.splitlines() if line.startswith("{")]
+        (attempt,) = [event for event in events if event.get("event") == "model.attempt.failed"]
+        assert attempt["usage"] == {"input_tokens": 14, "output_tokens": 8, "estimated": False}
+
+
+async def test_structured_fallback_matches_actual_http_requests(tmp_path, monkeypatch, caplog):
+    pytest.importorskip("agentscope")
+    from agent_components.core.contracts import Message, ModelRequest
+    from agent_components.models.providers.openai_compatible import (
+        OpenAIModelSettings,
+        openai_compatible_clients,
+    )
+
+    caplog.set_level("INFO", logger="agent_components.model_calls")
+    with model_endpoint(
+        {"amount": 3200}, status=lambda body: 503 if body["model"] == "route-test-model" else 200
+    ) as (url, calls):
+        config = json.loads(settings(tmp_path, monkeypatch, url).read_bytes())
+        config["fallback_routes"] = {"route": ["default"]}
+        config["execution"]["max_attempts"] = 2
+        config["models"]["default"]["structured_tool_choice"] = "auto"
+        async with openai_compatible_clients(OpenAIModelSettings.model_validate(config)) as (
+            client,
+            _,
+        ):
+            result = await client.generate(
+                ModelRequest(
+                    task="structured_extraction",
+                    messages=(Message(role="user", text="合同金额"),),
+                    schema={"type": "object"},
+                )
+            )
+
+    assert result.data == {"amount": 3200}
+    events = [
+        json.loads(row.message)
+        for row in caplog.records
+        if row.name == "agent_components.model_calls"
+    ]
+    attempts = [e for e in events if e["event"] == "model.attempt.started"]
+    assert (
+        [e["model"] for e in attempts]
+        == [call["model"] for call in calls]
+        == ["route-test-model", "default-test-model"]
+    )
+    assert calls[1]["tool_choice"] == "auto"
+    assert len({e["call_id"] for e in events}) == 1
+    assert len({e["attempt_id"] for e in attempts}) == 2
+    sends = [e for e in events if e["event"] == "model.http.request"]
+    assert [e["attempt_id"] for e in sends] == [e["attempt_id"] for e in attempts]
+
+
+@pytest.mark.parametrize("status", [307, 503])
+async def test_external_native_openai_client_is_limited_to_one_dispatch(status):
+    pytest.importorskip("agentscope")
+    import openai
+    from agentscope.credential import OpenAICredential
+    from agentscope.model import OpenAIChatModel
+    from pydantic import SecretStr
+
+    from agent_components.core.contracts import Message, ModelRequest
+    from agent_components.models.providers.agentscope import AgentScopeStructuredModel
+
+    with model_endpoint({}, status=status) as (url, calls):
+        native = OpenAIChatModel(
+            credential=OpenAICredential(api_key=SecretStr("test"), base_url=url),
+            model="external",
+            stream=False,
+            max_retries=1,
+            retry_delay=0,
+            client_kwargs={"max_retries": 1, "timeout": 3},
+        )
+        async with native.client:
+            with pytest.raises(openai.APIError):
+                await AgentScopeStructuredModel(native).generate(
+                    ModelRequest(
+                        messages=(Message(role="user", text="test"),), schema={"type": "object"}
+                    )
+                )
+    assert len(calls) == 1
+    assert native.max_retries == native.client.max_retries == 1
+
+
+@pytest.mark.parametrize("status", [200, 307])
+def test_embedding_http_request_matches_attempt_and_reported_usage(status, caplog):
+    openai = pytest.importorskip("openai")
+    from agent_components.models.providers.openai_compatible import OpenAICompatibleEmbeddings
+
+    caplog.set_level("INFO", logger="agent_components.model_calls")
+    with model_endpoint({}, status=status) as (url, calls):
+        embeddings = OpenAICompatibleEmbeddings(
+            model="embed", api_key="private-test-key", base_url=url, dimension=3
+        )
+        try:
+            if status == 200:
+                assert embeddings.embed_batch(["private document"]) == [[1.0, 0.2, 0.1]]
+            else:
+                with pytest.raises(openai.APIError):
+                    embeddings.embed_batch(["private document"])
+        finally:
+            embeddings.close()
+    assert len(calls) == 1
+    events = [
+        json.loads(row.message)
+        for row in caplog.records
+        if row.name == "agent_components.model_calls"
+    ]
+    outcome = "completed" if status == 200 else "failed"
+    assert [event["event"] for event in events] == [
+        "model.started",
+        "model.attempt.started",
+        "model.http.request",
+        f"model.attempt.{outcome}",
+        f"model.{outcome}",
+    ]
+    assert len({row["call_id"] for row in events}) == 1
+    assert len({event["attempt_id"] for event in events[1:-1]}) == 1
+    if status == 200:
+        assert events[-2]["usage"]["input_tokens"] == events[-1]["usage"]["input_tokens"] == 10
+        assert events[-1]["usage"]["output_tokens"] is None
+    assert "private" not in str(events)
 
 
 def test_langextract_provider_uses_thread_and_task_route(tmp_path, monkeypatch):
@@ -157,6 +281,46 @@ def test_langextract_provider_uses_thread_and_task_route(tmp_path, monkeypatch):
         )
         assert result == [[{"extractions": []}]]
         assert calls[0]["model"] == "route-test-model"
+
+
+async def test_support_evidence_uses_configured_route_through_native_http(tmp_path, monkeypatch):
+    pytest.importorskip("agentscope")
+    pytest.importorskip("langextract")
+    from agent_components.core.contracts import Document
+    from agent_components.models.providers.openai_compatible import (
+        OpenAIModelSettings,
+        openai_compatible_clients,
+    )
+    from agent_components.support import ExtractionOptions, Extractor
+
+    def response(body):
+        properties = body["tools"][0]["function"]["parameters"]["properties"]
+        if "extractions" in properties:
+            return {"extractions": [{"quote": "合同金额3200元"}]}
+        return {
+            "data_json": '{"amount":3200}',
+            "citations": [{"path": "/amount", "evidence_ids": ["1"]}],
+        }
+
+    with model_endpoint(response) as (url, calls):
+        config = OpenAIModelSettings.model_validate_json(
+            settings(tmp_path, monkeypatch, url).read_bytes()
+        )
+        async with openai_compatible_clients(config) as (client, _):
+            result = await Extractor(client).extract(
+                Document(id="contract", text="合同金额3200元。"),
+                {
+                    "type": "object",
+                    "properties": {"amount": {"type": "integer"}},
+                    "required": ["amount"],
+                },
+                ExtractionOptions(strategy="evidence"),
+            )
+    assert result.status == "success", result.errors
+    assert result.evidence[0].quote == "合同金额3200元"
+    assert [call["model"] for call in calls] == ["route-test-model"] * 2
+    assert result.usage.input_tokens == 28
+    assert result.usage.output_tokens == 16
 
 
 def test_provider_error_code_cannot_leak_remote_payload(tmp_path, monkeypatch):

@@ -10,6 +10,8 @@ from jsonschema import FormatChecker
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
 from pydantic import BaseModel, JsonValue
+from referencing import Registry
+from referencing.exceptions import Unresolvable
 
 from agent_components.core.contracts import Issue
 from agent_components.core.errors import InvalidSchemaError
@@ -58,11 +60,17 @@ def validate_data(data: JsonValue, schema: dict[str, JsonValue]) -> tuple[Issue,
 
     Returns:
         按 JSON Pointer 排序的问题元组；无问题时为空。
+
+    Raises:
+        InvalidSchemaError: 引用无法从所提供的 Schema 解析。
     """
-    validator = validator_for(schema)(schema, format_checker=FormatChecker())
+    # 校验域使用传入的 Schema，避免由业务 Schema 触发隐式远程检索。
+    validator = validator_for(schema)(schema, format_checker=FormatChecker(), registry=Registry())
+    try:
+        errors = sorted(validator.iter_errors(data), key=lambda item: pointer(item.absolute_path))
+    except Unresolvable as exc:
+        raise InvalidSchemaError("Schema reference could not be resolved locally") from exc
     return tuple(
         Issue(code="schema_validation", message=error.message, path=pointer(error.absolute_path))
-        for error in sorted(
-            validator.iter_errors(data), key=lambda item: pointer(item.absolute_path)
-        )
+        for error in errors
     )

@@ -64,7 +64,7 @@ uv build
 | 流式 | `StreamingChunker.iter_text` / `iter_file` | 磁盘快照、有界窗口、跨窗口表格与重叠、资源硬上限 |
 | 检索后处理 | `ContextExpander.expand` / `mmr_select` / `deduplicate` | 父块和邻块、上下文合并、MMR、文本近重复与可追溯结果 |
 | 模型 | `agent_components.models.ModelClient.generate` | 模型配置、规则路由、逻辑调用日志与 Provider 适配。[模型包 README](src/agent_components/models/README.md) |
-| 抽取 | `agent_components.extraction.Extractor.extract` | Document/Chunk＋JSON Schema/Pydantic → 校验结果；无需 Agent/数据库 |
+| 抽取 | `agent_components.support.Extractor.extract` | Document/Chunk＋JSON Schema/Pydantic，支持普通结构化和长文档字段证据。[抽取包 README](src/agent_components/support/README.md) |
 | 执行控制 | `agent_components.execution.ExecutionController.run` | 总超时、并发、取消和显式瞬时错误重试 |
 | 状态 | `agent_components.storage.sqlite.SQLiteStateStore` | 命名空间与版本条件写入的 StateEnvelope |
 | 索引 | `agent_components.retrieval.LanceDBIndex` | 向量和 ICU 中文全文索引、范围过滤、索引核验与删除 |
@@ -73,11 +73,9 @@ uv build
 | 文本检索 | `agent_components.retrieval.RetrievalPipeline.search` | 向量和 BM25、RRF、HTTP 重排、去重或 MMR、父块与邻块扩展。[接入示例](docs/examples/retrieval.md) |
 | 评测 | `evaluate_schema` / `evaluate_retrieval` | Schema 和标准检索指标，不隐式调用裁判模型 |
 | AgentScope | `adapters.agentscope` | 原生模型、Context、权限、Skills 发现与 SQL 工厂 |
-| LangExtract | `adapters.langextract.create_provider` | 原生模型 Provider 桥接；完整业务 Schema 证据映射仍待实施 |
+| LangExtract | `models.providers.langextract.create_provider` | 原生 Provider，通过统一模型客户端请求和记录分段调用 |
 
 接口与类型定义见 `src/agent_components/core`；这里没有内置订单、审批页面或固定业务 DAG。重型库仅在显式使用对应 Adapter 时加载。
-
-**Evidence 策略未配置 Backend 时明确报错。** 当前 LangExtract Provider 不等于完整的长文档业务字段/证据组件；完整范围见 STATUS.md，不能把接口桥接视为该能力已经交付。
 
 ## SQLite 迁移
 

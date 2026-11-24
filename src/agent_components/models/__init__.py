@@ -2,7 +2,11 @@
 
 from agent_components.core.contracts import Message, ModelOutput, ModelRequest, Usage
 from agent_components.core.ports import StructuredModel
-from agent_components.models.call_logging import MODEL_CALL_LOGGER_NAME
+from agent_components.models.call_logging import (
+    MODEL_CALL_LOGGER_NAME,
+    configure_model_logging,
+    model_log_context,
+)
 from agent_components.models.client import ModelClient
 from agent_components.models.contracts import (
     ChatBackend,
@@ -16,8 +20,12 @@ from agent_components.models.memory import (
     MemorySnapshot,
     StateConversationMemory,
 )
+from agent_components.models.routing import ModelProfile
 
 __all__ = [
+    "ModelProfile",
+    "configure_model_logging",
+    "model_log_context",
     "MODEL_CALL_LOGGER_NAME",
     "ChatBackend",
     "ChatOutput",

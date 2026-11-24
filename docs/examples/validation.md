@@ -22,7 +22,7 @@
 - 章节父子关系、父块替换、流式 JSONL、MMR、去重、真实 ir_measures 指标。
 - 真实 SQLite 创建、读取、CAS 冲突；主数据库及 WAL／SHM／journal、硬链接／符号链接路径冲突在连接前拒绝。
 - 真实 LanceDB upsert 重复执行、向量检索及空允许文档集合。
-- 真实 AgentScope/OpenAI 客户端连接本地 HTTP：任务路由、显式别名优先、原生结构错误 fallback、日志正文与供应商错误码隔离。
+- 真实 AgentScope/OpenAI 客户端连接本地 HTTP：任务路由、显式别名优先、原生结构错误的实际请求上限和配置的备用模型、日志正文与供应商错误码隔离。
 - 真实 LangExtract Provider 的线程桥接；AgentScope 原生权限、Skill、SQL storage 与快照恢复。
 - 真实 TCP 连接成功与关闭端口重试失败；可选依赖未安装时七个入口 `--help` 可用。
 

@@ -225,8 +225,8 @@ def main() -> int:
     if args.session_id is not None or args.memory_db is not None:
         if args.operation != "chat" or args.session_id is None or args.memory_db is None:
             parser.error("--session-id and --memory-db must be used together with chat")
+    configure_logs()
     if args.operation in ("chat", "extract"):
-        configure_logs()
         return asyncio.run(_run_text(args))
     return _run_retrieval_models(args)
 

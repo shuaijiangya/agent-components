@@ -127,6 +127,9 @@ async def test_stream_chat_recalls_only_session_local_history_and_commits_final_
     assert "首轮私密正文" not in caplog.text and "session-a" not in caplog.text
     assert [json.loads(record.message)["event"] for record in caplog.records] == [
         "model.started",
+        "model.route",
+        "model.attempt.started",
+        "model.attempt.completed",
         "model.completed",
     ]
 

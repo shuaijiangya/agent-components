@@ -219,6 +219,7 @@ class Issue(Contract):
     message: str
     path: str = ""
     input_id: str | None = None
+    segment: int | None = Field(default=None, ge=1)
 
 
 class ChunkResult(Contract):
@@ -307,6 +308,8 @@ class ModelRequest(Contract):
     """描述统一模型入口的一次结构化请求。
 
     schema 为目标 JSON Schema；路由优先使用 model_alias，其次 task，最后默认模型。
+    required_capabilities 列出本次调用所需的模型标签。input_tokens 可传入调用方
+    对完整输入（含系统指令与 Schema）的 Token 数，用于路由的上下文窗口检查。
     """
 
     messages: tuple[Message, ...] = Field(min_length=1)
@@ -316,6 +319,8 @@ class ModelRequest(Contract):
     request_id: str | None = None
     system_prompt: str | None = None
     max_tokens: int | None = Field(default=None, ge=1, strict=True)
+    required_capabilities: tuple[str, ...] = ()
+    input_tokens: int | None = Field(default=None, ge=0, strict=True)
 
 
 class ModelOutput(Contract):
@@ -342,12 +347,51 @@ class Evidence(Contract):
     end: int | None = Field(default=None, ge=0)
     alignment: Literal["exact", "fuzzy", "unlocated"]
     source_refs: tuple[SourceRef, ...] = ()
+    proposed_quote: str | None = None
+
+
+class ExampleCitation(Contract):
+    """为抽取示例指定已有原文引文和对应的目标字段路径。"""
+
+    field_path: str
+    quote: str = Field(pattern=r"\S")
+
+
+class ExtractionExample(Contract):
+    """为模型提供示例输入、目标数据和可选的原文引文。"""
+
+    text: str = Field(pattern=r"\S")
+    data: JsonValue
+    evidence: tuple[ExampleCitation, ...] = ()
+
+    @model_validator(mode="after")
+    def check_quotes(self) -> Self:
+        """确保示例引文确实出现在给定的示例正文。"""
+        if any(item.quote not in self.text for item in self.evidence):
+            raise ValueError("example evidence quotes must appear verbatim in example text")
+        return self
+
+
+class EvidenceOptions(Contract):
+    """配置 LangExtract 分段、多轮、对齐及当前抽取的模型调用预算。
+
+    max_model_calls 包含最后的结构归并，计量单位为统一模型入口的逻辑调用。
+    max_synthesis_chars 限制发送给归并模型的 JSON 消息字符数。
+    """
+
+    max_char_buffer: int = Field(default=2000, ge=1)
+    extraction_passes: int = Field(default=1, ge=1)
+    context_window_chars: int | None = Field(default=None, ge=1)
+    enable_fuzzy_alignment: bool = True
+    fuzzy_alignment_threshold: float = Field(default=0.75, gt=0, le=1)
+    max_model_calls: int = Field(default=128, ge=2)
+    max_synthesis_chars: int = Field(default=80000, ge=1)
 
 
 class ExtractionOptions(Contract):
     """控制独立抽取组件的策略与模型路由。
 
-    evidence 需要显式注入证据后端；instructions 为调用方指定的额外抽取要求。
+    timeout_seconds 覆盖组件总运行时间；max_output_tokens 限制每次逻辑模型调用。
     """
 
     instructions: str = ""
@@ -355,6 +399,38 @@ class ExtractionOptions(Contract):
     model_alias: str | None = None
     request_id: str | None = None
     system_prompt: str | None = None
+    examples: tuple[ExtractionExample, ...] = ()
+    timeout_seconds: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    max_output_tokens: int | None = Field(default=None, ge=1, strict=True)
+    evidence: EvidenceOptions = Field(default_factory=EvidenceOptions)
+
+
+class ExtractionCoverage(Contract):
+    """标识抽取输入在规范文档中的范围及处理状态。
+
+    segments 是分段处理次数，含多轮和因预算跳过的分段；start/end 为文档偏移。
+    """
+
+    input_id: str
+    document_id: str
+    revision_id: str
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+    status: Literal["complete", "partial", "failed"]
+    segments: int = Field(ge=0)
+    completed_segments: int = Field(ge=0)
+
+
+class ExtractionMeta(Contract):
+    """携带范围、请求关联、模型和执行信息。"""
+
+    strategy: Literal["structured", "evidence"]
+    request_id: str | None = None
+    requested_model_alias: str | None = None
+    models: tuple[str, ...] = ()
+    model_calls: int = Field(default=0, ge=0)
+    duration_seconds: float = Field(default=0, ge=0)
+    coverage: tuple[ExtractionCoverage, ...] = ()
 
 
 class ExtractionResult(Contract):
@@ -371,6 +447,7 @@ class ExtractionResult(Contract):
     warnings: tuple[Issue, ...] = ()
     input_ids: tuple[str, ...] = ()
     usage: Usage = Field(default_factory=Usage)
+    meta: ExtractionMeta | None = None
 
 
 class StateEnvelope(Contract):

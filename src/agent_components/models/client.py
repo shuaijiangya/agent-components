@@ -2,17 +2,19 @@
 
 import json
 import math
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import aclosing
 from itertools import takewhile
 from typing import cast, overload
+
+from pydantic import SecretStr
 
 from agent_components.core.contracts import Message, ModelOutput, ModelRequest, Usage
 from agent_components.core.errors import UnsupportedCapabilityError
 from agent_components.core.ports import StructuredModel
 from agent_components.core.schema import normalize_schema, validate_data
 from agent_components.execution import ExecutionController
-from agent_components.models.call_logging import _model_call
+from agent_components.models.call_logging import ModelCall
 from agent_components.models.contracts import (
     ChatBackend,
     ChatOutput,
@@ -21,8 +23,9 @@ from agent_components.models.contracts import (
     StreamingChatBackend,
     TextDelta,
 )
+from agent_components.models.dispatch import dispatch
 from agent_components.models.memory import ConversationMemory, MemorySnapshot
-from agent_components.models.routing import _ModelRouter
+from agent_components.models.routing import ModelProfile, _ModelRouter
 
 
 def _finite_json_float(value: str) -> float:
@@ -45,6 +48,9 @@ class ModelClient:
         *,
         default_alias: str,
         task_routes: Mapping[str, str] | None = None,
+        profiles: Mapping[str, ModelProfile] | None = None,
+        fallback_routes: Mapping[str, Sequence[str]] | None = None,
+        log_secrets: Sequence[str | SecretStr] = (),
         execution: ExecutionController | None = None,
         system_prompt: str | None = None,
         memory: ConversationMemory | None = None,
@@ -56,6 +62,9 @@ class ModelClient:
             models: 模型别名与相应能力后端。
             default_alias: 无显式别名和任务规则时使用的模型。
             task_routes: 任务名称到模型别名的静态映射。
+            profiles: 按别名声明能力和上下文窗口。
+            fallback_routes: 按优先级排列的备用别名。
+            log_secrets: 正文日志脱敏时要屏蔽的已知凭据。
             execution: 并发、超时和重试控制器。
             system_prompt: 默认系统指令，可由单次请求覆盖。
             memory: 支持版本条件写入的会话历史后端。
@@ -63,7 +72,17 @@ class ModelClient:
         """
         if type(max_history_turns) is not int or max_history_turns < 1:
             raise ValueError("max_history_turns must be a positive integer")
-        self._router = _ModelRouter(models, default_alias, task_routes)
+        self._router = _ModelRouter(
+            models, default_alias, task_routes, profiles=profiles, fallback_routes=fallback_routes
+        )
+        known_secrets = list(log_secrets)
+        for backend in models.values():
+            secrets = getattr(backend, "log_secrets", ())
+            if isinstance(secrets, tuple):
+                known_secrets.extend(
+                    secret for secret in secrets if isinstance(secret, (str, SecretStr))
+                )
+        self._log_secrets = tuple(known_secrets)
         self._execution = execution or ExecutionController()
         self._system_prompt = system_prompt
         self._memory = memory
@@ -124,33 +143,50 @@ class ModelClient:
             request.session_id, messages[-self._history_size :], expected_revision=snapshot.revision
         )
 
-    async def generate(self, request: ModelRequest) -> ModelOutput:
-        """路由并执行非流式结构化请求，由调用方执行额外的业务校验。"""
-        alias, backend = self._router.resolve(request)
-        if not callable(getattr(backend, "generate", None)):
-            raise UnsupportedCapabilityError("Selected model does not support structured output")
-        structured_model = cast(StructuredModel, backend)
-        prepared = request.model_copy(
-            update={"messages": self._messages(request), "system_prompt": None}
+    def _call(self, request: ChatRequest | ModelRequest, operation: str) -> ModelCall:
+        return ModelCall(
+            request.task,
+            request_id=request.request_id,
+            alias=request.model_alias,
+            operation=operation,
+            secrets=self._log_secrets,
+            body=[msg.model_dump(mode="json") for msg in request.messages],
         )
-        with _model_call(request, alias) as complete:
-            output = await self._execution.run(lambda: structured_model.generate(prepared))
-            complete(output)
-        return output
+
+    async def generate(self, request: ModelRequest) -> ModelOutput:
+        """按规则请求结构化输出，所有候选模型共享尝试次数。"""
+        with self._call(request, "generate") as call:
+            prepared = request.model_copy(
+                update={"messages": self._messages(request), "system_prompt": None}
+            )
+
+            async def invoke(backend: ModelBackend) -> AsyncGenerator[ModelOutput, None]:
+                yield await cast(StructuredModel, backend).generate(prepared)
+
+            async with aclosing(
+                dispatch(self._router, self._execution, prepared, "generate", call, invoke)
+            ) as stream:
+                async for output in stream:
+                    result = output
+            call.complete(model=result.model, usage=result.usage, body=result.data)
+            return result
 
     async def chat(self, request: ChatRequest) -> ChatOutput:
-        """返回完整聊天结果。启用会话时在成功后保存一轮。"""
-        alias, backend = self._router.resolve(request)
-        if not callable(getattr(backend, "chat", None)):
-            raise UnsupportedCapabilityError("Selected model does not support chat")
-        chat_model = cast(ChatBackend, backend)
-        with _model_call(request, alias) as complete:
+        """按包含系统指令和会话历史的输入选模，成功后提交一轮历史。"""
+        with self._call(request, "chat") as call:
             prepared, snapshot = await self._chat_request(request)
-            output = await self._execution.run(lambda: chat_model.chat(prepared))
-            # 存储提交独立于供应商的重试，避免写入失败后重新生成回复。
-            await self._save_turn(request, snapshot, output)
-            complete(output)
-        return output
+
+            async def invoke(backend: ModelBackend) -> AsyncGenerator[ChatOutput, None]:
+                yield await cast(ChatBackend, backend).chat(prepared)
+
+            async with aclosing(
+                dispatch(self._router, self._execution, prepared, "chat", call, invoke)
+            ) as stream:
+                async for output in stream:
+                    result = output
+            await self._save_turn(request, snapshot, result)
+            call.complete(model=result.model, usage=result.usage, body=result.text)
+            return result
 
     def stream_chat(self, request: ChatRequest) -> AsyncGenerator[TextDelta | ChatOutput, None]:
         """返回文本增量和最后一个完整结果，提前退出时用 aclosing 释放请求。"""
@@ -171,11 +207,8 @@ class ModelClient:
     async def _stream(
         self, request: ModelRequest | ChatRequest
     ) -> AsyncGenerator[TextDelta | ChatOutput | ModelOutput, None]:
-        alias, backend = self._router.resolve(request)
-        if not callable(getattr(backend, "stream_chat", None)):
-            raise UnsupportedCapabilityError("Selected model does not support streaming")
-        streaming_model = cast(StreamingChatBackend, backend)
-        with _model_call(request, alias) as complete:
+        operation = "stream_generate" if isinstance(request, ModelRequest) else "stream_chat"
+        with self._call(request, operation) as call:
             schema = None
             snapshot = None
             if isinstance(request, ModelRequest):
@@ -190,41 +223,56 @@ class ModelClient:
                     task=request.task,
                     model_alias=request.model_alias,
                     request_id=request.request_id,
+                    required_capabilities=request.required_capabilities,
+                    input_tokens=request.input_tokens,
                     max_tokens=request.max_tokens,
                 )
             else:
                 prepared, snapshot = await self._chat_request(request)
 
-            parts: list[str] = []
-            usage = Usage()
-            model = None
-            # 流与非流共用并发槽。流开始后保留已输出的序列，异常直接传给调用方。
-            async with aclosing(
-                self._execution.iterate(
-                    lambda: streaming_model.stream_chat(prepared, json_mode=schema is not None)
-                )
-            ) as deltas:
-                async for delta in deltas:
-                    if delta.usage is not None:
-                        usage = delta.usage
-                    if delta.model is not None:
-                        model = delta.model
-                    if delta.text:
-                        parts.append(delta.text)
-                        yield TextDelta(text=delta.text)
+            async def invoke(
+                backend: ModelBackend,
+            ) -> AsyncGenerator[TextDelta | ModelOutput | ChatOutput, None]:
+                parts: list[str] = []
+                usage = Usage()
+                model = None
+                provider = cast(StreamingChatBackend, backend)
+                async with aclosing(
+                    provider.stream_chat(prepared, json_mode=schema is not None)
+                ) as chunks:
+                    async for delta in chunks:
+                        if delta.usage is not None:
+                            usage = delta.usage
+                        if delta.model is not None:
+                            model = delta.model
+                        if delta.text:
+                            parts.append(delta.text)
+                            yield TextDelta(text=delta.text)
+                text = "".join(parts)
+                if schema is not None:
+                    data = json.loads(
+                        text, parse_float=_finite_json_float, parse_constant=_finite_json_float
+                    )
+                    if validate_data(data, schema):
+                        raise ValueError("Streamed output does not match the target schema")
+                    yield ModelOutput(data=data, usage=usage, model=model)
+                else:
+                    yield ChatOutput(text=text, usage=usage, model=model)
 
-            text = "".join(parts)
-            output: ModelOutput | ChatOutput
-            if schema is not None:
-                data = json.loads(
-                    text, parse_float=_finite_json_float, parse_constant=_finite_json_float
-                )
-                if validate_data(data, schema):
-                    raise ValueError("Streamed output does not match the target schema")
-                output = ModelOutput(data=data, usage=usage, model=model)
-            else:
-                output = ChatOutput(text=text, usage=usage, model=model)
+            async with aclosing(
+                dispatch(self._router, self._execution, prepared, operation, call, invoke)
+            ) as stream:
+                async for item in stream:
+                    if isinstance(item, TextDelta):
+                        yield item
+                    else:
+                        output = item
+            if isinstance(output, ChatOutput):
                 assert isinstance(request, ChatRequest)
                 await self._save_turn(request, snapshot, output)
-            complete(output)
+            call.complete(
+                model=output.model,
+                usage=output.usage,
+                body=output.text if isinstance(output, ChatOutput) else output.data,
+            )
         yield output

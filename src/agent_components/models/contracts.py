@@ -14,6 +14,8 @@ class ChatRequest(Contract):
 
     显式 system_prompt 覆盖客户端默认值，messages 内的系统指令继续参与本次请求。
     携带 session_id 时由客户端读取历史，messages 只提交本轮用户消息及本轮系统指令。
+    required_capabilities 列出本次调用所需的模型标签。input_tokens 可传入调用方
+    对完整组装输入（含历史与系统指令）的 Token 数，供路由与输出上限一起检查。
     """
 
     messages: tuple[Message, ...] = Field(min_length=1)
@@ -23,6 +25,8 @@ class ChatRequest(Contract):
     system_prompt: str | None = None
     session_id: str | None = Field(default=None, pattern=r"\S")
     max_tokens: int | None = Field(default=None, ge=1, strict=True)
+    required_capabilities: tuple[str, ...] = ()
+    input_tokens: int | None = Field(default=None, ge=0, strict=True)
 
 
 class ChatOutput(Contract):
