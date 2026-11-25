@@ -26,6 +26,7 @@ uv run --no-sync python -m examples.documents --help
 | 超时／并发／显式重试 | `examples.execution` | 核心 | [状态与执行控制](state-execution.md) |
 | 模型策略路由／结构化提取 | `examples.models generate / extract` | `agent` | [模型与提取](models.md) |
 | LangExtract Provider | `examples.models langextract` | `agent`、`extraction` | [模型与提取](models.md) |
+| Agent 运行与工具查询 | `examples.agent_runtime` | `agent` | [Agent 接入文档](../../src/agent_components/agent/README.md) |
 | 上下文／权限／Skill／原生存储适配 | `examples.runtime` | `agent`；存储需 `agent-storage` | [AgentScope 适配](agentscope.md) |
 | Schema／Recall、nDCG、RR | `examples.evaluate` | Schema 核心；检索指标 `evaluation` | [评测](evaluation.md) |
 

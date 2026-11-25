@@ -22,7 +22,8 @@
 | 存储防腐层 | `LifecycleRepository`、`ArtifactStore`、`ManagedVectorStore`、`KeywordStore`，内容与向量实例通过 `StorageRouter` 按请求选取 |
 | LanceDB | 向量、原生 ICU 中文分词与 BM25、范围预过滤、按块核验与清理 |
 | 文本检索 | 向量／关键词／混合三种模式、LanceDB RRF、HTTP 重排与失败策略、各阶段分数、精确去重／近重复／MMR、父块和邻块 |
-| AgentScope | 模型级结构化适配、原生上下文快照/压缩入口、权限判定转换、Skills 发现与内容版本 |
+| AgentScope 运行与编排 | `AgentScopeAdapter` 装配原生模型和业务工具，提供完整与流式运行、参数校验、待确认状态、超时和取消。[接入文档](../src/agent_components/agent/README.md) |
+| AgentScope 能力适配 | 模型级结构化适配、原生上下文快照/压缩入口、权限判定转换、Skills 发现与内容版本 |
 | 原生 SQL Storage | 独立工厂，原生模块真实导入与 SQLite 创建/查询；不启动服务 |
 | LangExtract | 真实 BaseLanguageModel Provider 桥接统一模型入口，提供同步线程到异步调用的转换 |
 | 评测 | Schema 指标、ir_measures Recall/nDCG/RR；不默认调用裁判模型 |
@@ -33,7 +34,7 @@
 - PDF 权重实际推理、OCR 与更完整 Office 文件矩阵和模型质量验收；元素级 SourceMap 已实现。
 - 按业务语料验收长文档抽取的字段准确率、引文充分性和模型配置。当前用真实 LangExtract、AgentScope 和本地 HTTP 响应验证执行链路。
 - DeepEval 的统一裁判模型适配、字段与证据的完整指标及报告。
-- Agent 运行入口、完整消息/工具事件协议、框架配置映射、Skills 挂载和原生失败明细。
+- AgentScope 原生上下文策略配置扩展与 Skills 挂载。
 - 人工确认请求、过期、参数绑定、持久记录、决定幂等和完整 HITL 恢复。
 - 原生状态保存边界、业务工具执行记录、结果未知对账和跨框架迁移。
 - 业务模型组合的线上质量验收，以及跨组件的全局调用和费用预算。

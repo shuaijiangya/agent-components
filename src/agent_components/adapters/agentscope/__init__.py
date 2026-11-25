@@ -2,3 +2,7 @@
 
 具体框架对象保留在该适配边界内。
 """
+
+from agent_components.adapters.agentscope.agent import AgentScopeAdapter
+
+__all__ = ["AgentScopeAdapter"]

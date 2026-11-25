@@ -8,7 +8,7 @@ from test_examples import invoke, successful, write_json
 
 
 @contextmanager
-def model_endpoint(data, *, status=200):
+def model_endpoint(data, *, status=200, tool_name="generate_structured_output"):
     calls = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -42,6 +42,7 @@ def model_endpoint(data, *, status=200):
                 self.end_headers()
                 self.wfile.write(json.dumps(response).encode())
                 return
+            answer = data(body) if callable(data) else data
             response = {
                 "id": "test-response",
                 "object": "chat.completion",
@@ -60,10 +61,8 @@ def model_endpoint(data, *, status=200):
                                     "id": "call-1",
                                     "type": "function",
                                     "function": {
-                                        "name": "generate_structured_output",
-                                        "arguments": json.dumps(
-                                            data(body) if callable(data) else data
-                                        ),
+                                        "name": tool_name,
+                                        "arguments": json.dumps(answer),
                                     },
                                 }
                             ],
@@ -71,6 +70,11 @@ def model_endpoint(data, *, status=200):
                     }
                 ],
             }
+            if isinstance(answer, str):
+                response["choices"][0].update(
+                    finish_reason="stop",
+                    message={"role": "assistant", "content": answer},
+                )
             encoded = json.dumps(response).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -107,6 +111,36 @@ def settings(tmp_path, monkeypatch, url):
             "execution": {"timeout_seconds": 10, "max_attempts": 1},
         },
     )
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_agent_runtime_example_runs_native_model_tool_and_final_reply(
+    streaming,
+    tmp_path,
+    monkeypatch,
+):
+    pytest.importorskip("agentscope")
+
+    def respond(body):
+        tool_output = next((msg for msg in body["messages"] if msg["role"] == "tool"), None)
+        return "订单42已就绪" if tool_output else {"number": 42}
+
+    with model_endpoint(respond, tool_name="lookup_order") as (url, calls):
+        config = settings(tmp_path, monkeypatch, url)
+        args = ["--config", config, "--model-alias", "route"]
+        if streaming:
+            args.append("--stream")
+        response = invoke("agent_runtime", *args)
+    assert response.returncode == 0, response.stderr
+    rows = [json.loads(line) for line in response.stdout.splitlines()]
+    final = rows[-1]["result"] if streaming else rows[0]
+    assert final["status"] == "completed"
+    assert final["message"]["text"] == "订单42已就绪"
+    assert final["tool_results"][0]["status"] == "success"
+    assert [call["model"] for call in calls] == ["route-test-model"] * 2
+    assert calls[0]["tools"][0]["function"]["name"] == "lookup_order"
+    assert "demo-tenant" not in repr(calls)
+    assert "ready" in repr(calls[1]["messages"])
 
 
 def test_real_native_model_transport_routing_validation_and_logs(tmp_path, monkeypatch):

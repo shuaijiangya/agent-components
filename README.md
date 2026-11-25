@@ -72,7 +72,8 @@ uv build
 | 存储切换 | `agent_components.storage.backends.StorageRouter` | 按请求独立选择已注册的内容仓储与向量存储 |
 | 文本检索 | `agent_components.retrieval.RetrievalPipeline.search` | 向量和 BM25、RRF、HTTP 重排、去重或 MMR、父块与邻块扩展。[接入示例](docs/examples/retrieval.md) |
 | 评测 | `evaluate_schema` / `evaluate_retrieval` | Schema 和标准检索指标，不隐式调用裁判模型 |
-| AgentScope | `adapters.agentscope` | 原生模型、Context、权限、Skills 发现与 SQL 工厂 |
+| Agent 运行 | `agent_components.adapters.agentscope.AgentScopeAdapter` | 装配模型与业务工具、完整运行和公共流式事件。[Agent 接入文档](src/agent_components/agent/README.md) |
+| AgentScope 能力适配 | `adapters.agentscope` | 原生模型、Context、权限、Skills 发现与 SQL 工厂 |
 | LangExtract | `models.providers.langextract.create_provider` | 原生 Provider，通过统一模型客户端请求和记录分段调用 |
 
 接口与类型定义见 `src/agent_components/core`；这里没有内置订单、审批页面或固定业务 DAG。重型库仅在显式使用对应 Adapter 时加载。
